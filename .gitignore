@@ -1,0 +1,8 @@
+# Cached third-party source documents pulled during research.
+# Excluded deliberately: they are large, they are other parties' copyright, and every one of
+# them is fully cited (publisher, date, page, URL) on the workbook's Sources sheet, so the
+# research is reproducible without redistributing the documents themselves.
+research/raw/
+__pycache__/
+*.pyc
+~$*.xlsx
