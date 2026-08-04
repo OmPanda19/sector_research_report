@@ -90,7 +90,10 @@ def compute(scen, overrides=None):
         "cap_sec_add", "cap_constrained")}
 
     cons_p, cap_p, pop_p, conv_p = CONS26, CAP26, POP26, 1.0
-    nwc_p = PROD26 * REALN26 / 10.0 * nwcd[0] / 365.0   # FY2026 NWC on the same days basis
+    # FY2026 opening net working capital. Struck at a FIXED 45 days, NOT the scenario's days
+    # driver: the base year is a historical balance and must not flex with the scenario, or the
+    # FY2027 working capital movement would embed an artificial step change on day one.
+    nwc_p = PROD26 * REALN26 / 10.0 * 45.0 / 365.0
     util_p = CRUDE26 / CAP26                            # FY2026 actual utilisation, 76.42%
     io_inr26, cc_inr26 = IO26 * INR26, CC26 * INR26
 
