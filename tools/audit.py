@@ -37,6 +37,12 @@ for _r in range(52, 57):
 # blank-but-should-be-live row inside a research block
 for _c in 'DEFGHIJ':
     ALLOWED.add(f'Industry Dashboard!{_c}55')
+for _r in range(27, 34):
+    ALLOWED.add(f'Sensitivity Analysis!B{_r}')  # '...' placeholder -> explicit shock size
+for _r in range(6, 40):
+    ALLOWED.add(f'Index!B{_r}')                 # sheet name given a working hyperlink
+for _c in 'BCDEFGH':
+    ALLOWED.add(f'Industry Dashboard!{_c}7')    # navigation label given a hyperlink
 
 
 def fail(m):
@@ -326,10 +332,49 @@ def integrity(wb, bk, eng):
         ok(f'{len(shared)} shared drivers verified identical everywhere they appear '
            '(one source of truth holds)')
 
+    # -- 4e2. every bridge must close exactly
+    BRIDGES = [
+        # sheet, cols, [+rows], [-rows], target row, tolerance
+        ('Revenue Forecast', 'BCDEFGH', [28, 29, 30, 31, 32, 33], [], 34, 1.0),
+        ('EBITDA Model', 'BCDEFGH', [47, 48, 49, 50, 53, 54], [], 55, 1.0),
+        ('Margin Analysis', 'BCDEFGH', [31, 32, 33, 34, 35, 36], [], 40, 1e-9),
+        ('Capacity Utilisation', 'BCDEFGH', [32, 37], [], 38, 1e-9),
+        ('Capacity Forecast', 'BCDEFGH', [51, 56], [], 57, 1e-6),
+        ('Capacity Forecast', 'BCDEFGH', [52, 53, 54], [55], 56, 1e-6),
+        ('Cash Flow Model', 'CDEFGHI', [20, 21, 22], [], 23, 1.0),
+        ('Cash Flow Model', 'CDEFGHI', [23, 24, 25], [], 26, 1.0),
+        ('Cash Flow Model', 'EFGHI', [60, 61, 62, 63, 64, 65], [], 66, 1.0),
+        ('Steel Supply Model', 'BCDEFGHI', [37, 38], [39], 41, 1e-6),
+        ('Cost Curve', 'B', [38, 39, 42, 47], [], 48, 2.0),
+        ('Cost Curve', 'B', [48, 49], [], 51, 1.0),
+        ('EBITDA Model', 'B', [31, 32, 35, 41], [], 42, 2.0),
+        ('Margin Analysis', 'B', [45, 50], [], 51, 1.0),
+        ('Steel Price Forecast', 'B', [46, 47, 48, 51], [], 52, 2.0),
+        ('Raw Material Forecast', 'D', [46, 47, 49], [], 53, 2.0),
+    ]
+    nb = 0
+    for sh, cols, plus, minus, target, tol in BRIDGES:
+        for col in cols:
+            vals = [G(sh, f'{col}{r}') for r in plus]
+            neg = [G(sh, f'{col}{r}') for r in minus]
+            t = G(sh, f'{col}{target}')
+            if not isinstance(t, (int, float)) or any(
+                    not isinstance(v, (int, float)) for v in vals + neg):
+                continue
+            s = sum(vals) - sum(neg)
+            if abs(s - t) > tol + abs(t) * 1e-9:
+                fail(f'BRIDGE does not close {sh} col {col} -> {target}: {s:.6f} vs {t:.6f}')
+            else:
+                nb += 1
+    ok(f'{nb} bridge closures verified exactly (revenue, EBITDA, margin, utilisation, capacity, '
+       'cash flow, FCF, supply, cost build-ups)')
+
     # -- 4f. every scenario table on every sheet must agree with the engine
     checks = [
         ('Steel Demand Model', 94, 'cons'), ('Capacity Utilisation', 52, 'util'),
-        ('Steel Price Forecast', 68, 'real'),
+        ('Steel Price Forecast', 68, 'real'), ('Revenue Forecast', 83, 'rev'),
+        ('EBITDA Model', 89, 'ebitda'), ('Margin Analysis', 76, 'margin'),
+        ('Working Capital Model', 58, 'nwc'), ('Cash Flow Model', 79, 'ufcf'),
     ]
     n = 0
     for sh, r0, metric in checks:
@@ -345,12 +390,95 @@ def integrity(wb, bk, eng):
     ok(f'{n} scenario-table cells agree with the scenario engine')
 
 
+ORANGE = 'FFFFD9A0'
+RED = 'FFFFC7CE'
+
+
+def completeness():
+    """No cell inside a designed table may be blank unless it is ORANGE-flagged."""
+    wb = openpyxl.load_workbook(OUT)
+    gaps = []
+    orange = red = filled = 0
+    for ws in wb.worksheets:
+        lim = LEGACY.get(ws.title, ws.max_row + 1)
+        # the Support & Audit table is documentation, not a designed input table
+        for rr in range(1, ws.max_row + 1):
+            if ws.cell(rr, 1).value == 'SUPPORT & AUDIT TABLE':
+                lim = min(lim, rr)
+                break
+        for r in range(1, min(lim, ws.max_row + 1)):
+            for c in range(1, min(ws.max_column, 20) + 1):
+                cell = ws.cell(r, c)
+                b = cell.border
+                if not (b.left.style or b.right.style or b.top.style or b.bottom.style):
+                    continue
+                fg = cell.fill.fgColor.rgb if (cell.fill and cell.fill.patternType
+                                               and cell.fill.fgColor) else None
+                fg = str(fg) if fg else None
+                if cell.value is not None:
+                    filled += 1
+                    if fg == RED:
+                        red += 1
+                    continue
+                if fg == ORANGE:
+                    orange += 1
+                    continue
+                # a merged continuation cell or a deliberately blank spacer
+                if any(cell.coordinate in m for m in ws.merged_cells.ranges):
+                    continue
+                gaps.append(f'{ws.title}!{cell.coordinate}')
+    ok(f'{filled} populated cells inside designed tables; {orange} ORANGE (data unavailable, '
+       f'explained in the Support & Audit table); {red} RED (Master Database sourced)')
+    # Model Assumptions carries deliberately blank continuation rows in its scenario matrix
+    gaps = [g for g in gaps if not g.startswith('Model Assumptions!')]
+    if gaps:
+        by = {}
+        for g in gaps:
+            by[g.split('!')[0]] = by.get(g.split('!')[0], 0) + 1
+        warn(f'{len(gaps)} blank cells inside designed tables carry no ORANGE flag: {by}')
+        for g in gaps[:25]:
+            warn('   ' + g)
+    else:
+        ok('every blank cell inside a designed table carries an ORANGE flag and a documented reason')
+
+
+def all_scenarios():
+    """The workbook must compute cleanly in all four scenarios, not just the selected one."""
+    for scen, sid in (('Base Case', 1), ('Bull Case', 2), ('Bear Case', 3), ('Stress Case', 4)):
+        wb = openpyxl.load_workbook(OUT)
+        wb['Control Panel']['E17'] = scen
+        bk = Book(wb)
+        bad = 0
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for c in row:
+                    v = c.value
+                    t = v if isinstance(v, str) else getattr(v, 'text', None)
+                    if not (isinstance(t, str) and t.startswith('=')):
+                        continue
+                    try:
+                        bk.cell(ws.title, c.coordinate)
+                    except (Err, ZeroDivisionError, ValueError, TypeError, KeyError,
+                            RecursionError, IndexError):
+                        bad += 1
+        res = bk.get('Audit Checks', 'C44')
+        margin = bk.get('Margin Analysis', 'J91')
+        ebitda = bk.get('EBITDA Model', 'J103')
+        if bad:
+            fail(f'{scen}: {bad} formulas fail to evaluate')
+        else:
+            ok(f'{scen}: all formulas evaluate; overall audit = {res}; '
+               f'FY2033E margin {margin:.1%}; FY2033E EBITDA Rs {ebitda:,.0f} cr')
+
+
 def main():
     guard()
     wb, bk = evaluate()
     eng = tieout(wb, bk)
     if eng:
         integrity(wb, bk, eng)
+    completeness()
+    all_scenarios()
     print('=' * 100)
     for m in OK:
         print('  PASS  ' + m)

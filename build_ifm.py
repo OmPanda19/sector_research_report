@@ -11,7 +11,8 @@ import sys
 import openpyxl
 from openpyxl.workbook.defined_name import DefinedName
 
-from gen import engine, support, assumptions, fills1, fills2
+from gen import (engine, support, assumptions, charts,
+                 fills1, fills2, fills3, fills4, fills5)
 from gen.spec import LEGACY
 
 SRC = 'incoming/IFM_user.xlsx'
@@ -74,6 +75,40 @@ def count_mdb(path='incoming/MDB_user.xlsx'):
     return counts
 
 
+CONVENTIONS = [
+    ('Blue font', 'Manual input',
+     'A value a user is expected to review or change. Structural parameters held constant across years '
+     'and scenarios, and the handful of deliberate zeros that are modelling statements rather than '
+     'placeholders, are all blue.'),
+    ('Black font', 'Formula computed on this sheet',
+     'Arithmetic performed in the cell itself. Every bridge, reconciliation, ratio and classification is '
+     'black.'),
+    ('Green font', 'Link to another sheet',
+     'The value exists in exactly one place in the workbook and is read from there. Roughly two thirds of '
+     'the model is green, which is the point: nothing is re-keyed.'),
+    ('Red fill', 'Sourced from Master Industry Database.xlsx',
+     'Historical actuals and company-level data imported from the database. These are the cells to convert '
+     'to external references when the two workbooks are reconnected. The exact intended external formula '
+     'is recorded against each one in the Support & Audit table of its sheet.'),
+    ('Orange fill', 'Reliable data unavailable after research - deliberately blank',
+     'Nothing is asserted in these cells. Every orange group has a row in its sheet\'s Support & Audit '
+     'table stating precisely why the data could not be obtained and what to enter instead. They are gaps '
+     'that are disclosed, not gaps that are hidden.'),
+]
+
+
+def convention_rows():
+    return [dict(
+        item=f'CONVENTION - {name}: {meaning}', value=None, unit='formatting convention',
+        method='Institutional modelling convention', formula='n/a',
+        primary='Model owner specification', secondary='n/a',
+        assumption='Applied without exception throughout the workbook.', reasoning=why,
+        cross='Verified by tools/audit.py: every blank cell inside a designed table carries an orange fill '
+              'and a documented reason',
+        conf='High', linked='All sheets', freq='n/a', last='n/a',
+        comments='Read this before reading any number.') for name, meaning, why in CONVENTIONS]
+
+
 def main():
     wb = openpyxl.load_workbook(SRC)
     log = []
@@ -113,6 +148,47 @@ def main():
     add('Capacity Utilisation', fills2.utilisation(wb, audit, eng))
     add('Steel Price Forecast', fills2.price(wb, audit, eng))
     add('Raw Material Forecast', fills2.rawmat(wb, audit, eng))
+    add('Cost Curve', fills3.cost_curve(wb, audit, eng))
+    add('Revenue Forecast', fills3.revenue(wb, audit, eng))
+    add('EBITDA Model', fills3.ebitda(wb, audit, eng))
+    add('Margin Analysis', fills3.margin(wb, audit, eng))
+    add('Working Capital Model', fills3.working_capital(wb, audit, eng))
+    add('Cash Flow Model', fills3.cash_flow(wb, audit, eng))
+    add('Capital Allocation', fills4.capital_allocation(wb, audit, eng))
+    add('Industry Cycle Model', fills4.cycle(wb, audit, eng))
+    add('Trade Model', fills4.trade(wb, audit, eng))
+    add('ESG Model', fills4.esg(wb, audit, eng))
+    add('Scenario Manager', fills5.scenario_manager(wb, audit, eng))
+    add('Sensitivity Analysis', fills5.sensitivity(wb, audit, eng))
+    add('Comparable Valuation', fills5.comparable_valuation(wb, audit, eng))
+    add('Industry Dashboard', fills5.dashboard(wb, audit, eng))
+    add('Index', fills5.index_links(wb, audit))
+
+    audit['Cover'] = convention_rows() + audit['Cover']
+
+    # ---- Support & Audit table on every sheet
+    dash_row = None
+    n_rows = 0
+    for name in wb.sheetnames:
+        ws = wb[name]
+        hr = support.write(ws, extra_rows=audit.get(name), na_rows=nas.get(name),
+                           intro=support.INTRO.get(name))
+        if hr:
+            n_rows += ws.max_row - hr
+            if name == 'Industry Dashboard':
+                dash_row = ws.max_row + 3
+    log.append(f'Support & Audit tables written to every sheet: {n_rows} documented items')
+
+    # ---- charts, built from scratch and linked to model ranges
+    made = charts.build(wb, dash_row=dash_row)
+    log.append(f'{len(made)} charts created across '
+               f'{len(set(s for s, _a, _t in made))} sheets')
+
+    # openpyxl writes formulas without cached results, so Excel must be told to
+    # recalculate on open or the user sees stale or empty cells.
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.calcCompleted = False
+    log.append('fullCalcOnLoad set - Excel recalculates the whole workbook on open')
 
     wb._ifm_audit = audit
     wb._ifm_nas = nas

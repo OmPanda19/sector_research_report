@@ -141,6 +141,12 @@ M = [
      lambda R, x, p: f"={x}{R('cons')}/'Steel Demand Model'!{{leg}}$119"),
     ('ev', 'Enterprise value at the exit multiple (terminal-year proxy)', 'Rs cr', '#,##0', None,
      lambda R, x, p: f"={x}{R('ebitda')}*{x}{R('exitmult')}"),
+    ('nopat', 'NOPAT', 'Rs cr', '#,##0;(#,##0)', None,
+     lambda R, x, p: f"={x}{R('ebit')}*(1-{x}{R('tax')})"),
+    ('ic', 'Invested capital (proxy)', 'Rs cr', '#,##0', None,
+     lambda R, x, p: f"=220.4*{x}{R('capexint')}/10+{x}{R('nwc')}"),
+    ('roic', 'ROIC (indicative)', '%', '0.0%', None,
+     lambda R, x, p: f"=IFERROR({x}{R('nopat')}/{x}{R('ic')},\"\")"),
 ]
 
 NAMES = [m[0] for m in M]

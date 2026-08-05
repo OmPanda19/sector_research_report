@@ -49,6 +49,30 @@ TEXT = '@'
 DATE = 'dd-mmm-yyyy'
 
 
+LINKBLUE = 'FF0563C1'
+
+
+def link_to(ws, addr, target_sheet, text=None):
+    """Internal navigation hyperlink.
+
+    openpyxl's Cell.hyperlink setter only registers a hyperlink on the worksheet when
+    `target` is set, so a location-only (internal) link is silently dropped on save.
+    The Hyperlink object is therefore appended to ws._hyperlinks explicitly.
+    """
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    c = ws[addr]
+    if text is not None:
+        c.value = text
+    h = Hyperlink(ref=addr, location=f"'{target_sheet}'!A1",
+                  tooltip=f'Go to {target_sheet}')
+    c.hyperlink = h
+    if h not in ws._hyperlinks:
+        ws._hyperlinks.append(h)
+    f = c.font
+    c.font = Font(name=f.name, sz=f.sz, b=f.b, i=f.i, u='single', color=LINKBLUE)
+    return c
+
+
 class SheetWriter:
     """Bound writer that records provenance for the Support & Audit table."""
 

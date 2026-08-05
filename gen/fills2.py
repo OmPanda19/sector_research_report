@@ -867,6 +867,9 @@ def rawmat(wb, audit, eng):
                           'observations that exist but are not fiscal-year averages: graphite electrode UHP '
                           'US$4,189/t and ferro chrome Rs 1,23,200/t, both at 22-Jun-2026.'))
     w.na('C53', 'Not applicable - row 53 is a total, not a price.')
+    w.na('C49', 'No price series exists for the "other ferrous and fluxes" block. It is a residual 10% '
+                'basket weight, not a traded commodity with a quoted price, so it is indexed rather '
+                'than priced. The COST of the block is on D49 and is computed.')
     nas.append(na_row('Specific consumption coefficients per tonne of crude steel', 'B46:B53',
                       NA['consumption_coef'], unit='t/t'))
     nas.append(na_row('Cost build-up for PCI coal, ferro alloys, electrodes and power', 'C48:D48, C50:D52',

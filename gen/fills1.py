@@ -1,9 +1,8 @@
 """Fills for 01 Control Panel, 02b Model Calibration, 00 Database Import,
 00H Forecast Horizon, 03 Macroeconomic Model and 04 Steel Demand Model."""
-from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.styles import Font, Alignment
 
-from .style import (SheetWriter, PCT0, PCT1, PCT2, NUM0, NUM1, NUM2, MT, MTS, RS, CR,
+from .style import (SheetWriter, link_to, PCT0, PCT1, PCT2, NUM0, NUM1, NUM2, MT, MTS, RS, CR,
                     X1, X2, SCORE, USD, TEXT, PPT)
 from .support import na_row
 from .spec import NA
@@ -68,10 +67,7 @@ def control_panel(wb, audit):
 
     # quick navigation
     for r, target in NAV_TARGETS.items():
-        c = ws[f'B{r}']
-        c.value = 'Go \u2192'
-        c.hyperlink = Hyperlink(ref=f'B{r}', location=f"'{target}'!A1")
-        c.font = Font(name=c.font.name, sz=c.font.sz, b=c.font.b, u='single', color='FF0563C1')
+        link_to(ws, f'B{r}', target, text='Go \u2192')
     rows.append(dict(item='Quick navigation links', value=None, unit='n/a',
                      method='Internal workbook hyperlink', formula="location = 'Sheet Name'!A1",
                      primary='n/a', secondary='n/a',
@@ -472,6 +468,8 @@ def demand(wb, audit, eng):
         w.link(f'{nc}18', f'=${lc}$121', NUM1)
         w.f(f'{nc}19', f'=IFERROR({lc}116/({lc}116+\'Trade Model\'!{lc}78),"")', PCT1)
     w.link('B20', '=$K$116', PCT1)
+    for i, nc in enumerate('CDEFGHI'):
+        w.f(f'{nc}20', f'=IFERROR(({LEG[i + 1]}116/$C$116)^(1/{i + 1})-1,"")', PCT1)
 
     # ---- historical demand rows 25-30
     hist = [(25, 'FY2021', 94.89, -0.0527), (26, 'FY2022', 105.75, 0.1144),

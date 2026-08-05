@@ -94,13 +94,64 @@ def _formula_text(cell):
     return f'(constant) {v}'
 
 
+# the research block on these sheets does not use the Line item / Unit / Source grammar
+SPECIAL = {'Audit Checks', 'Sources'}
+# where the research block stops, if something was appended below it
+LEGACY_STOP = {'Scenario Manager': 87}
+
+
+def harvest_special(ws):
+    """25 Audit Checks and 26 Sources carry their own column grammar."""
+    rows = []
+    if ws.title == 'Audit Checks':
+        for r in range(14, 45):
+            cid = ws.cell(r, 1).value
+            val = ws.cell(r, 2).value
+            if not isinstance(cid, str) and not isinstance(val, str):
+                continue
+            rows.append(dict(
+                item=f'{cid or "OVERALL"} - {val or "overall result"}',
+                value=f'=IF(C{r}="PASS",1,IF(C{r}="WARN",0.5,0))', unit='PASS / WARN / FAIL',
+                method='Live conditional test evaluated on every recalculation',
+                formula=_formula_text(ws.cell(r, 3)),
+                primary='Computed from the model itself',
+                secondary='Several checks are duplicated independently on 02b Model Calibration',
+                assumption='None. A check is a test, not an assumption.',
+                reasoning=str(ws.cell(r, 4).value or '')[:900],
+                cross='Re-evaluates when the scenario is changed on 01 Control Panel',
+                conf='High', linked=_sheets_in(ws.cell(r, 3).value),
+                freq='Live', last='Live',
+                comments=f'Research block row {r}. A WARN is a signal to read the number, not a defect.',
+                numfmt='0.0'))
+        return rows
+    for r in range(14, ws.max_row + 1):
+        ref = ws.cell(r, 1).value
+        if not isinstance(ref, str) or not ref.strip():
+            continue
+        rows.append(dict(
+            item=f'{ref} - {ws.cell(r, 3).value or ""}', value=None,
+            unit=f'Level {ws.cell(r, 2).value}' if ws.cell(r, 2).value else '',
+            method='Source record', formula='n/a',
+            primary=f'{ws.cell(r, 3).value or ""} - {ws.cell(r, 4).value or ""}',
+            secondary=str(ws.cell(r, 7).value or ''),
+            assumption=str(ws.cell(r, 6).value or ''),
+            reasoning=str(ws.cell(r, 8).value or '')[:900],
+            cross=str(ws.cell(r, 7).value or ''), conf='Level ' + str(ws.cell(r, 2).value or ''),
+            linked='02 Model Assumptions', freq='On each publication cycle',
+            last=str(ws.cell(r, 5).value or ''), comments=f'Source register row {r}.'))
+    return rows
+
+
 def harvest_legacy(ws):
     """Build support rows from the pre-existing research block."""
     start = LEGACY.get(ws.title)
     rows = []
     if not start:
         return rows
-    for r in range(start, ws.max_row + 1):
+    if ws.title in SPECIAL:
+        return harvest_special(ws)
+    stop = LEGACY_STOP.get(ws.title, ws.max_row)
+    for r in range(start, stop + 1):
         item = ws.cell(r, 1).value
         if not isinstance(item, str) or not item.strip():
             continue
@@ -214,6 +265,34 @@ def write(ws, extra_rows=None, na_rows=None, intro=None):
         if letter not in ws.column_dimensions:
             ws.column_dimensions[letter].width = 26
     return hr
+
+
+INTRO = {
+    'Cover': 'This workbook is an integrated industry financial model, not a set of independent '
+             'forecasts. Real GDP growth and a demand elasticity drive volume; volume against capacity '
+             'drives utilisation; utilisation feeds back into realisation with a one-year lag; '
+             'realisation less cash cost drives margin, cash flow and valuation. The table below records '
+             'the coverage universe and the model metadata on this page.',
+    'Index': 'Every sheet in the workbook, its role, and where its numbers come from. Sheet names in '
+             'column B are live hyperlinks.',
+    'Database Import': 'What is imported from Master Industry Database.xlsx, how many records each '
+                       'dataset carries, and the external reference formula that should replace each '
+                       'RED cell when the two workbooks are reconnected.',
+    'Forecast Horizon': 'Why the forecast horizon is seven years. The scoring is a framework; the '
+                        'evidence behind each score is stated on the sheet.',
+    'Control Panel': 'The six workbook status tests and the fourteen navigation links. Every status '
+                     'cell is a live formula that can fail - none is a hard-coded tick.',
+    'Model Assumptions': 'THE SINGLE SOURCE OF TRUTH FOR THE WHOLE WORKBOOK. Twenty-six drivers, each '
+                         'with four scenario paths and a documented source. Nothing downstream re-keys '
+                         'any of these values; everything links here. The table below documents the '
+                         'FY2026A anchor of every driver.',
+    'Model Calibration': 'The FY2026A actuals every forecast is anchored on, and five arithmetic '
+                         'reconciliations that prove the anchors are internally consistent.',
+    'Audit Checks': 'Thirty live validations plus the standing limitations. The table below explains '
+                    'what each check proves and what to do if it fails.',
+    'Sources': 'Every source used for a forward-looking assumption, with publisher, publication, date '
+               'and what it is used for.',
+}
 
 
 def na_row(label, addrs, reason, unit='', linked='This sheet'):
