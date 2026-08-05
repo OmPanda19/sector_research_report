@@ -6,3 +6,6 @@ research/raw/
 __pycache__/
 *.pyc
 ~$*.xlsx
+
+# Working copies of the owner-supplied workbooks and intermediate dumps used by the builder.
+incoming/
