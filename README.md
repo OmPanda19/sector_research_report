@@ -121,6 +121,16 @@ Prepared from public sources only. Contains no non-public or price-sensitive inf
 
 # Industry Financial Model — Indian Steel Industry
 
+> **This section describes an earlier build.** The current workbook is produced by
+> `build_ifm.py` from the owner's formatted file and has been substantially rebuilt: the
+> per-sheet Support & Audit tables have been replaced by a central reference register on
+> `25 Audit Checks` keyed by reference code, the orange/red convention has been corrected
+> (orange = external workbook, red = missing data), two arithmetic defects have been fixed
+> rather than flagged, the over-complex formulas have been simplified, and missing cells have
+> gone from 1,717 to 430. **See [`REBUILD_NOTES.md`](REBUILD_NOTES.md) for the full account,
+> and [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for the current verification output.**
+
+
 **Deliverable:** `Industry Financial Model.xlsx` — 8 worksheets, 1,138 live formulas, **built to be copy-pasted**.
 
 **Horizon: FY2027E–FY2033E (7 years). Base year FY2026A.**

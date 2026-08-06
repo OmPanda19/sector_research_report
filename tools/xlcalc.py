@@ -434,6 +434,16 @@ class Book:
                     raise Err('STDEV n<2')
                 m = sum(v) / len(v)
                 return math.sqrt(sum((x - m) ** 2 for x in v) / (len(v) - 1))
+        if name in ('ROWS', 'COLUMNS'):
+            # A range evaluates to a flat list, so the shape is recovered from the
+            # argument text rather than from its value.
+            txt = ''.join(str(t[1]) for t in args[0]).upper()
+            m = re.search(r'\$?([A-Z]{1,3})\$?(\d+)\s*:\s*\$?([A-Z]{1,3})\$?(\d+)', txt)
+            if m:
+                r1, r2 = int(m.group(2)), int(m.group(4))
+                c1, c2 = ci(m.group(1)), ci(m.group(3))
+                return float(abs(r2 - r1) + 1) if name == 'ROWS' else float(abs(c2 - c1) + 1)
+            return 1.0
         if name == 'SUMPRODUCT':
             arrs = [flat(i) for i in range(na)]
             n = max(len(a) for a in arrs)

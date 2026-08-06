@@ -1,32 +1,46 @@
 """Institutional modelling conventions for the Industry Financial Model.
 
 Colour conventions mandated by the model owner:
-    Blue font   = manual input
-    Black font  = formula cell
-    Green font  = link to another sheet / external source
-    Red fill    = value that should be an external link to Master Industry Database.xlsx
-    Orange fill = reliable data unavailable after exhaustive research
+    Blue font    = manual input
+    Black font   = formula cell
+    Green font   = link to another sheet
+    Orange fill  = sourced from an external workbook (Master Industry Database.xlsx)
+    Red fill     = missing data - no reliable source and no defensible estimate
+
+Note on the orange/red pair: the owner's specification reads "External Workbook -
+yellow/orange" and "Missing Data - Red", so external-workbook cells are ORANGE and
+missing-data cells are RED. Both are defined once, here, in EXT_RGB / MISS_RGB; swap
+those two strings to reverse the pair everywhere in the workbook and in the audit
+tooling, which reads these same constants.
 
 The user's existing design is FINAL. We therefore only ever:
   * write .value
   * set .number_format when the existing format is 'General' (i.e. the cell was
     never formatted because it was empty)
-  * set .fill only for the RED / ORANGE conventions
+  * set .fill only for the EXTERNAL / MISSING conventions
   * set .font colour only where the convention carries information and the cell
     is not part of a coloured header band
 """
 from openpyxl.styles import Font, PatternFill, Alignment
 
+# ---------------------------------------------------------------- fills (single source of truth)
+EXT_RGB = 'FFFFD9A0'    # orange - value sourced from an external workbook
+MISS_RGB = 'FFFFC7CE'   # red    - data missing, nothing asserted
+
 # ---------------------------------------------------------------- fonts
 BLUE = 'FF0000CC'      # manual input
 BLACK = 'FF000000'     # formula
-GREEN = 'FF008000'     # cross-sheet / external link
-DARKRED = 'FF9C0006'   # text on red fill
-DARKORANGE = 'FF7F4F00'  # text on orange fill
+GREEN = 'FF008000'     # cross-sheet link
+DARKRED = 'FF9C0006'   # text on the missing-data fill
+DARKORANGE = 'FF7F4F00'  # text on the external-workbook fill
 
 # ---------------------------------------------------------------- fills
-FILL_DB = PatternFill('solid', fgColor='FFFFC7CE')      # red  - connect to Master DB
-FILL_NA = PatternFill('solid', fgColor='FFFFD9A0')      # orange - unavailable
+FILL_EXT = PatternFill('solid', fgColor=EXT_RGB)    # orange - external workbook
+FILL_MISS = PatternFill('solid', fgColor=MISS_RGB)  # red    - missing data
+
+# Legacy aliases: db() writes external-workbook cells, na() writes missing-data cells.
+FILL_DB = FILL_EXT
+FILL_NA = FILL_MISS
 
 # ---------------------------------------------------------------- number formats
 PCT0 = '0%'
@@ -130,23 +144,41 @@ class SheetWriter:
         return c
 
     def db(self, addr, value, fmt=None, ref=None):
-        """Master-Industry-Database sourced value -> RED fill."""
+        """Value sourced from Master Industry Database.xlsx -> ORANGE fill."""
         c = self._cell(addr)
         c.value = value
         self._fmt(c, fmt)
-        c.fill = FILL_DB
-        self._font(c, DARKRED)
+        c.fill = FILL_EXT
+        self._font(c, DARKORANGE)
         if ref:
             self.ws.parent._db_refs = getattr(self.ws.parent, '_db_refs', {})
             self.ws.parent._db_refs[f'{self.ws.title}!{addr}'] = ref
         return c
 
     def na(self, addr, reason):
-        """Data genuinely unavailable -> blank + ORANGE fill."""
+        """Data genuinely missing -> blank + RED fill.
+
+        Reserved for cells where there is no source AND no defensible way to model the
+        value. A cell that can be estimated from a documented driver must be modelled
+        with est() instead, so the model stays complete.
+        """
         c = self._cell(addr)
         c.value = None
-        c.fill = FILL_NA
+        c.fill = FILL_MISS
         self.na_reasons[addr] = reason
+        return c
+
+    def est(self, addr, value, fmt=None):
+        """Modelled estimate entered as an input (blue font, no fill).
+
+        Used where no published series exists but the value is derivable from a stated
+        assumption. The assumption, its basis and its confidence are recorded in the
+        reference register, so the number is auditable rather than asserted.
+        """
+        c = self._cell(addr)
+        c.value = value
+        self._fmt(c, fmt)
+        self._font(c, BLUE)
         return c
 
     def txt(self, addr, text, fmt=TEXT):

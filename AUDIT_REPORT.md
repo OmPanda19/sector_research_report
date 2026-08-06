@@ -8,8 +8,8 @@
   PASS  research blocks untouched: no populated cell at or below any legacy start row changed
   PASS  no pre-existing value overwritten outside the disclosed allow-list
   PASS  no pre-existing cell had its font, fill, number format, alignment or border changed
-  PASS  89 deliberate, disclosed edits to previously populated cells (placeholders, hard-coded ticks, one wrong denominator, navigation hyperlinks)
-  PASS  8232 formulas evaluated
+  PASS  99 deliberate, disclosed edits to previously populated cells (placeholders, hard-coded ticks, one wrong denominator, navigation hyperlinks)
+  PASS  9659 formulas evaluated
   PASS  every formula in the workbook evaluates without error
   PASS  44/44 independent FY2033E tie-out values reproduced by the scenario engine
   PASS  158 engine cells match the live model exactly for the active scenario (Base Case)
@@ -18,16 +18,17 @@
   PASS  capacity monotonic, utilisation inside the practical ceiling and cash cost positive in all 4 scenarios
   PASS  Rs/t x Mt / 10 = Rs crore unit bridge holds on revenue and EBITDA in every year
   PASS  10 shared drivers verified identical everywhere they appear (one source of truth holds)
-  PASS  75 bridge closures verified exactly (revenue, EBITDA, margin, utilisation, capacity, cash flow, FCF, supply, cost build-ups)
+  PASS  83 bridge closures verified exactly (revenue, EBITDA, margin, utilisation, capacity, cash flow, FCF, supply, cost build-ups)
+  PASS  raw material cost cross-check: bottom-up Rs 32,072/t against top-down Rs 30,814/t, gap +4.1%
   PASS  224 scenario-table cells agree with the scenario engine
-  PASS  8082 populated cells inside designed tables; 1717 ORANGE (data unavailable, explained in the Support & Audit table); 99 RED (Master Database sourced)
-  PASS  every blank cell inside a designed table carries an ORANGE flag and a documented reason
+  PASS  9955 populated cells inside designed tables; 430 RED (missing data, each group explained in the reference register); 99 ORANGE (sourced from the Master Database)
+  PASS  every blank cell inside a designed table carries a missing-data flag and a documented reason
   PASS  Base Case: all formulas evaluate; overall audit = PASS WITH WARNINGS; FY2033E margin 16.8%; FY2033E EBITDA Rs 315,788 cr
   PASS  Bull Case: all formulas evaluate; overall audit = PASS WITH WARNINGS; FY2033E margin 25.2%; FY2033E EBITDA Rs 535,067 cr
   PASS  Bear Case: all formulas evaluate; overall audit = PASS WITH WARNINGS; FY2033E margin 8.0%; FY2033E EBITDA Rs 122,426 cr
   PASS  Stress Case: all formulas evaluate; overall audit = PASS WITH WARNINGS; FY2033E margin 9.9%; FY2033E EBITDA Rs 157,106 cr
 ====================================================================================================
-22 pass, 0 warn, 0 fail
+23 pass, 0 warn, 0 fail
 ```
 
 ## File integrity

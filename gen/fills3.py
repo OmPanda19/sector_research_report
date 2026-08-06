@@ -2,7 +2,9 @@
 15 Working Capital Model and 16 Cash Flow Model."""
 from .style import (SheetWriter, PCT0, PCT1, PCT2, NUM0, NUM1, NUM2, MT, MTS, RS, CR,
                     X1, X2, USD, TEXT, PPT)
-from .support import na_row
+from .support import na_row, est_row
+from .estimates import (WC_MIX, WC_MIX_BASIS, WC_MIX_REASONING, RM_MIX, RM_MIX_BASIS,
+                        CONV_MIX, CONV_MIX_BASIS, COST_MIX_REASONING)
 from .spec import NA
 
 LEG = 'CDEFGHIJ'
@@ -106,25 +108,46 @@ def cost_curve(wb, audit, eng):
         'Was entirely blank. Jindal Stainless is shown at rank 5 with an explicit caveat: its cash cost of '
         'about Rs 1,45,500/t is real but reflects stainless, whose realisation is 2.79x carbon steel.', RS))
 
-    # ---- cost build-up rows 38-51
-    w.f('B38', "=$C$80*'Model Assumptions'!$D$20*'Model Assumptions'!$D$21", RS)
-    w.f('B39', "=$C$80*'Model Assumptions'!$D$20*'Model Assumptions'!$D$21", RS)
-    w.f('B42', "=$C$80*'Model Assumptions'!$D$20*(1-2*'Model Assumptions'!$D$21)", RS)
-    w.f('B47', "=$C$80*(1-'Model Assumptions'!$D$20)", RS)
-    w.link('B48', '=$C$80', RS)
+    # ---- cost build-up rows 38-51, decomposed from the shared cost mix.
+    # Raw material shares in column J, conversion shares in column K, both visible.
+    RM_ROW = {'ore': 38, 'coal': 39, 'pci': 40, 'scrap': 41, 'flux': 42}
+    CONV_ROW = {'power': 43, 'labour': 44, 'maint': 45, 'logistics': 46, 'other': 47, 'sga': 50}
+    for key, label, share in RM_MIX:
+        r = RM_ROW[key]
+        w.est(f'J{r}', share, '0.000')
+        w.f(f'B{r}', f"=$C$80*'Model Assumptions'!$D$20*$J${r}", RS)
+    for key, label, share in CONV_MIX:
+        r = CONV_ROW[key]
+        w.est(f'K{r}', share, '0.000')
+        w.f(f'B{r}', f"=$C$80*(1-'Model Assumptions'!$D$20)*$K${r}", RS)
+    # SG&A on row 50 is a MEMO carve-out of the conversion block, so cash cost on row 48
+    # remains the sum of rows 38 to 47 and total cost stays row 48 plus depreciation.
+    w.f('B47', "=$C$80*(1-'Model Assumptions'!$D$20)*($K$47+$K$50)", RS)
+    w.f('B48', '=SUM(B38:B47)', RS)
     w.f('B49', '=' + DPT.format(lc='C'), RS)
     w.f('B51', '=B48+B49', RS)
-    inside = ('Not separately identified. PCI coal and scrap are not in the basket; power, labour, '
-              'maintenance, logistics and SG&A all sit inside OTHER MANUFACTURING on row 47, which is the '
-              'conversion-cost block the model indexes to RBI CPI as a single line. No Indian producer '
-              'discloses a cost-per-tonne breakdown at this granularity in the sources available.')
-    for r in (40, 41, 43, 44, 45, 46, 50):
-        w.na(f'B{r}', inside)
-        w.na(f'C{r}', inside)
-    for r in (38, 39, 42, 47, 48, 49, 51):
+    for r in list(RM_ROW.values()) + list(CONV_ROW.values()) + [48, 49, 51]:
         w.f(f'C{r}', f'=IFERROR(B{r}/$B$51,"")', PCT1)
-    nas.append(na_row('Cost build-up for PCI coal, scrap, power, labour, maintenance, logistics and SG&A',
-                      'B40:C41, B43:C46, B50:C50', inside, unit='Rs/t'))
+    rows.append(est_row(
+        'Cost build-up decomposition', 'B38:C51', RM_MIX_BASIS + ' ' + CONV_MIX_BASIS,
+        COST_MIX_REASONING + ' On this sheet specifically: rows 38 to 47 now sum to cash cost on row 48, '
+        'which still equals the calibrated Rs 49,241/t exactly. SG&A on row 50 is a MEMORANDUM carve-out of '
+        'the conversion block already counted on row 47 - it is NOT added again, because the model\'s cash '
+        'cost is realisation less EBITDA per tonne and therefore already includes selling and administrative '
+        'expense. Total cost on row 51 remains cash cost plus depreciation.',
+        unit='Rs/t', linked='Model Assumptions, Cash Flow Model', value='=B48', numfmt=RS,
+        method='Cash cost split by the raw material shares in column J and the conversion shares in '
+               'column K',
+        formula="=$C$80*'Model Assumptions'!$D$20*$J$38 for iron ore; "
+                "=$C$80*(1-'Model Assumptions'!$D$20)*$K$43 for power",
+        primary='Iron ore and coking coal weights ARE drivers D13 and D14. The sub-splits are modelled.',
+        secondary='The power share reproduces the bottom-up power cost derived independently on 10 Raw '
+                  'Material Forecast from a published consumption coefficient and a sourced tariff',
+        cross='ROWS 38 TO 47 MUST SUM TO ROW 48, the calibrated cash cost, and row 48 plus row 49 must '
+              'equal row 51. Both verified by tools/audit.py. Column J must sum to 1.00 and column K must '
+              'sum to 1.00.',
+        conf='Medium for the raw material split, which rests on the drivers; Low for the conversion split',
+        freq='Annually'))
     rows.append(_sup(
         'Cost build-up, FY2026A', '=B51', 'Rs/t',
         'Computed in-cell by applying drivers D13 and D14 to the calibrated cash cost',
@@ -420,11 +443,40 @@ def ebitda(wb, audit, eng):
         w.link(f'B{r}', f"='Revenue Forecast'!${lc}$96", CR)
         w.f(f'C{r}', '=' + RM.format(lc=lc, ma=ma), CR)
         w.f(f'D{r}', '=' + CV.format(lc=lc, ma=ma), CR)
-        for col in 'EFG':
-            w.na(f'{col}{r}', inside)
-        w.f(f'H{r}', f'=C{r}+D{r}', CR)
+        # Logistics, SG&A and other opex CARVED OUT of the conversion-cost column using the
+        # shared conversion mix, so column D is reduced by exactly what E, F and G show and
+        # total opex in column H is unchanged.
+        w.f(f'E{r}', f'=$D${r}/(1-$K$19-$K$20-$K$21)*$K$19', CR)
+        w.f(f'F{r}', f'=$D${r}/(1-$K$19-$K$20-$K$21)*$K$20', CR)
+        w.f(f'G{r}', f'=$D${r}/(1-$K$19-$K$20-$K$21)*$K$21', CR)
+        w.f(f'H{r}', f'=C{r}+D{r}+E{r}+F{r}+G{r}', CR)
         w.link(f'I{r}', f'=${lc}$103', CR)
-    nas.append(na_row('EBITDA build-up: logistics, SG&A and other opex', 'E19:G26', inside, unit='Rs cr'))
+    # conversion-cost column D is net of the three carved-out shares
+    for i, r in enumerate(range(19, 27)):
+        lc, ma = LEG[i], MA8[i]
+        w.f(f'D{r}', '=(' + CV.format(lc=lc, ma=ma) + ')*(1-$K$19-$K$20-$K$21)', CR)
+    conv = dict((k, s) for k, _l, s in CONV_MIX)
+    w.est('K19', conv['logistics'], '0.000')
+    w.est('K20', conv['sga'], '0.000')
+    w.est('K21', conv['other'], '0.000')
+    rows.append(est_row(
+        'EBITDA build-up - logistics, SG&A and other opex', 'E19:G26', CONV_MIX_BASIS,
+        'Three columns across eight years were blank because logistics, SG&A and other operating cost sit '
+        'inside the conversion-cost block that the model indexes as a single line. They are now CARVED OUT '
+        'of that block using the shared conversion mix, with the three shares in K19 to K21. The '
+        'conversion-cost column D is reduced by exactly the amount the three new columns show, so TOTAL OPEX '
+        'IN COLUMN H IS UNCHANGED and revenue less total opex still equals EBITDA exactly - which is the '
+        'same statement as realisation less cash cost equals EBITDA per tonne, and is the cross-check that '
+        'proves the unit bridge has not been broken.',
+        unit='Rs cr', linked='Cost Curve, Model Assumptions, Steel Supply Model', value='=H26', numfmt=CR,
+        method='Conversion cost grossed back up and re-split using the shared conversion shares in K19:K21',
+        formula='=$D$19/(1-$K$19-$K$20-$K$21)*$K$19',
+        primary='Shared conversion cost mix - see gen/estimates.py and 11 Cost Curve',
+        secondary='Identical shares are used by 11 Cost Curve and 14 Margin Analysis',
+        cross='COLUMN B LESS COLUMN H MUST STILL EQUAL COLUMN I in every year, independently tested by '
+              'check A12 on 25 Audit Checks and by the bridge closures in tools/audit.py',
+        conf='Low for the split, High for the total it redistributes',
+        freq='Annually'))
     rows.append(_sup(
         'EBITDA build-up', '=I26', 'Rs cr',
         'Computed in-cell: revenue less raw material cost less conversion cost',
@@ -446,14 +498,39 @@ def ebitda(wb, audit, eng):
     w.f('B32', f"='Cost Curve'!$C$80*'Model Assumptions'!$D$20*'Model Assumptions'!$D$21*{V}/10", CR)
     w.f('B35', f"='Cost Curve'!$C$80*'Model Assumptions'!$D$20*(1-2*'Model Assumptions'!$D$21)*{V}/10", CR)
     w.f('B41', f"='Cost Curve'!$C$80*(1-'Model Assumptions'!$D$20)*{V}/10", CR)
-    w.f('B42', '=B31+B32+B35+B41', CR)
-    for r in (33, 34, 36, 37, 38, 39, 40):
-        w.na(f'B{r}', inside)
-        w.na(f'C{r}', inside)
-    for r in (31, 32, 35, 41, 42):
+    # Rs-crore cost decomposition using the same shared mix as 11 Cost Curve, so the two
+    # sheets state the same split in different units.
+    EM_RM = {'ore': 31, 'coal': 32, 'pci': 33, 'scrap': 34, 'flux': 35}
+    EM_CV = {'power': 36, 'labour': 37, 'maint': 38, 'logistics': 39, 'sga': 40, 'other': 41}
+    for key, label, share in RM_MIX:
+        r = EM_RM[key]
+        w.f(f'B{r}', f"='Cost Curve'!$J${ {'ore': 38, 'coal': 39, 'pci': 40, 'scrap': 41, 'flux': 42}[key] }"
+                     f"*'Cost Curve'!$C$80*'Model Assumptions'!$D$20*{V}/10", CR)
+    for key, label, share in CONV_MIX:
+        r = EM_CV[key]
+        cc_row = {'power': 43, 'labour': 44, 'maint': 45, 'logistics': 46, 'other': 47, 'sga': 50}[key]
+        w.f(f'B{r}', f"='Cost Curve'!$K${cc_row}"
+                     f"*'Cost Curve'!$C$80*(1-'Model Assumptions'!$D$20)*{V}/10", CR)
+    w.f('B42', '=SUM(B31:B41)', CR)
+    for r in range(31, 43):
         w.f(f'C{r}', f'=IFERROR(B{r}/$B$42,"")', PCT1)
-    nas.append(na_row('Cost bridge: PCI coal, scrap, power, labour, maintenance, logistics and SG&A',
-                      'B33:C34, B36:C40', inside, unit='Rs cr'))
+    rows.append(est_row(
+        'Cost bridge in Rs crore', 'B31:C42', RM_MIX_BASIS + ' ' + CONV_MIX_BASIS,
+        'Seven of the eleven cost components were blank. They now read the SAME shares that 11 Cost Curve '
+        'uses, held in columns J and K of that sheet, multiplied by cash cost and finished production. The '
+        'two sheets therefore state one cost split in two units - Rs/t on the cost curve and Rs crore here - '
+        'and cannot disagree, because there is only one set of shares. Row 42 is a live SUM of all eleven '
+        'components and must equal total opex.',
+        unit='Rs cr', linked='Cost Curve, Model Assumptions, Steel Supply Model', value='=B42', numfmt=CR,
+        method='Shared cost shares on 11 Cost Curve applied to cash cost and finished production',
+        formula="='Cost Curve'!$J$38*'Cost Curve'!$C$80*'Model Assumptions'!$D$20"
+                "*'Steel Supply Model'!$C$101/10",
+        primary='Shared cost mix - one definition, referenced by four sheets',
+        secondary='11 Cost Curve states the identical split per tonne',
+        cross='Row 42 must equal cash cost multiplied by finished production, and must equal total opex on '
+              'row 19 column H',
+        conf='Low for the split, High for the total',
+        freq='Annually'))
 
     # ---- EBITDA bridge rows 47-55
     for i, nc in enumerate(NEW7):
@@ -468,12 +545,28 @@ def ebitda(wb, audit, eng):
                        f"-'Cost Curve'!{pc}80*(1-'Model Assumptions'!{pma}$20))/10", CR)
         w.inp(f'{nc}54', 0, CR)
         w.link(f'{nc}55', f'=${lc}$103', CR)
-        for r in (51, 52):
-            w.na(f'{nc}{r}', 'Energy and logistics are inside the conversion-cost block, so their effect is '
-                             'inside OPERATING LEVERAGE on row 53. Separating them would require a '
-                             'fixed/variable and energy/freight split that no producer discloses.')
-    nas.append(na_row('EBITDA bridge: energy and logistics effects', 'B51:H52',
-                      'Inside the conversion-cost effect on row 53.', unit='Rs cr'))
+        # Energy and logistics effects CARVED OUT of the conversion-cost effect on row 53
+        # using the shared shares, so rows 47 to 54 still sum to row 55.
+        w.f(f'{nc}51', f"={nc}53/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$43", CR)
+        w.f(f'{nc}52', f"={nc}53/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$46", CR)
+        w.f(f'{nc}53', f"=-{lc}102*('Cost Curve'!{lc}80*(1-'Model Assumptions'!{ma}$20)"
+                       f"-'Cost Curve'!{pc}80*(1-'Model Assumptions'!{pma}$20))/10"
+                       f"*(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)", CR)
+    rows.append(est_row(
+        'EBITDA bridge - energy and logistics effects', 'B51:H52', CONV_MIX_BASIS,
+        'Two rows across seven years were blank because energy and logistics sit inside the conversion-cost '
+        'effect. They are now carved out of it at the shared power and logistics shares, and the '
+        'conversion-cost effect on row 53 is reduced by exactly that amount, so ROWS 47 TO 54 STILL SUM TO '
+        'ROW 55 - the bridge closes exactly as before. This is the same treatment applied on the cost '
+        'build-up and the EBITDA build-up, using the same two shares, so all three tell one story.',
+        unit='Rs cr', linked='Cost Curve, Model Assumptions', value='=H51', numfmt=CR,
+        method='Conversion-cost effect apportioned at the shared power and logistics shares',
+        formula="=B53/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$43",
+        primary='Shared conversion cost mix on 11 Cost Curve',
+        secondary='Same shares used by the EBITDA build-up above and by 14 Margin Analysis',
+        cross='ROWS 47 TO 54 MUST SUM TO ROW 55, verified by the bridge closures in tools/audit.py',
+        conf='Low for the split, High for the total it redistributes',
+        freq='Annually'))
     rows.append(_sup(
         'EBITDA bridge', '=H55', 'Rs cr',
         'Exact decomposition: volume at prior-year EBITDA per tonne, plus price, less the raw material and '
@@ -616,16 +709,35 @@ def margin(wb, audit, eng):
         w.inp(f'{nc}35', 0, PCT2)
         w.f(f'{nc}36', f"=('Cost Curve'!{pc}80*(1-'Model Assumptions'!{pma}$20)"
                        f"-'Cost Curve'!{lc}80*(1-'Model Assumptions'!{ma}$20))/{lc}88", PCT2)
-        for r in (37, 38, 39):
-            w.na(f'{nc}{r}', 'Logistics and energy are inside the conversion-cost effect on row 36. FX has '
-                             'no direct margin channel in this model: the exchange rate enters through '
-                             'dollar-denominated iron ore and coking coal, so its whole effect is already '
-                             'inside the RAW MATERIAL EFFECT on row 33. Showing it again here would '
-                             'double-count.')
+        # Logistics and energy carved out of the conversion-cost effect at the shared shares;
+        # row 36 is reduced by exactly that amount so the bridge still closes. FX is a real
+        # structural zero - its whole effect is already inside the raw material effect.
+        w.f(f'{nc}37', f"={nc}36/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$46", PCT2)
+        w.f(f'{nc}38', f"={nc}36/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$43", PCT2)
+        w.inp(f'{nc}39', 0, PCT2)
+        w.f(f'{nc}36', f"=('Cost Curve'!{pc}80*(1-'Model Assumptions'!{pma}$20)"
+                       f"-'Cost Curve'!{lc}80*(1-'Model Assumptions'!{ma}$20))/{lc}88"
+                       f"*(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)", PCT2)
         w.link(f'{nc}40', f'=${lc}$91', PCT1)
-    nas.append(na_row('Margin bridge: logistics, energy and FX effects', 'B37:H39',
-                      'Logistics and energy are inside the conversion-cost effect (row 36); FX is inside '
-                      'the raw material effect (row 33). Separating them would double-count.', unit='ppt'))
+    rows.append(est_row(
+        'Margin bridge - logistics, energy and FX effects', 'B37:H39', CONV_MIX_BASIS,
+        'Three rows across seven years were blank. Two of them are now carved out of the conversion-cost '
+        'effect at the shared logistics and power shares, with row 36 reduced by exactly that amount so the '
+        'bridge still closes to the last basis point. THE FX ROW IS A GENUINE STRUCTURAL ZERO and stays at '
+        'zero: the exchange rate enters this model only through dollar-denominated iron ore and coking coal, '
+        'so its entire margin effect is already inside the raw material effect on row 33. Showing a non-zero '
+        'FX line here would double-count the single largest driver in the model, which is precisely the kind '
+        'of error a plausible-looking filled cell would have hidden. Writing the zero states the reason '
+        'instead.',
+        unit='ppt', linked='Cost Curve, Model Assumptions', value='=H37', numfmt=PCT2,
+        method='Conversion-cost effect apportioned at the shared shares; FX an explicit zero',
+        formula="=B36/(1-'Cost Curve'!$K$43-'Cost Curve'!$K$46)*'Cost Curve'!$K$46",
+        primary='Shared conversion cost mix on 11 Cost Curve',
+        secondary='The same shares are used by 13 EBITDA Model and 11 Cost Curve',
+        cross='ROWS 31 TO 39 MUST STILL SUM TO ROW 40 in every year, and the FY2033E base-case margin must '
+              'remain 16.8%. Verified by tools/audit.py.',
+        conf='Low for the split; High for the FX zero, which is a structural fact about the model',
+        freq='Annually'))
     rows.append(_sup(
         'Margin bridge', '=H40', '%',
         'Exact decomposition of a ratio: margin = 1 - cash cost / realisation, so the change splits into a '
@@ -657,19 +769,38 @@ def margin(wb, audit, eng):
     # ---- cost ratio analysis rows 45-51 (FY2026A)
     V = "'Steel Supply Model'!$C$101"
     REV = "'Revenue Forecast'!$C$96"
+    CONV = f"'Cost Curve'!$C$80*(1-'Model Assumptions'!$D$20)*{V}/10"
     w.f('B45', f"='Cost Curve'!$C$80*'Model Assumptions'!$D$20*{V}/10", CR)
-    w.f('B50', f"='Cost Curve'!$C$80*(1-'Model Assumptions'!$D$20)*{V}/10", CR)
-    w.f('B51', '=B45+B50', CR)
-    inside = ('Energy, logistics, labour and SG&A are inside OTHER OPEX on row 50, which is the '
-              'conversion-cost block the model indexes to RBI CPI as a single line. No Indian producer '
-              'discloses these separately per tonne of crude steel in the sources available.')
-    for r in (46, 47, 48, 49):
-        w.na(f'B{r}', inside)
-        w.na(f'C{r}', inside)
+    # Energy, logistics, labour and SG&A carved out of other opex at the shared shares
+    MG_CV = {46: 'power', 47: 'logistics', 48: 'labour', 49: 'sga'}
+    CC_ROW = {'power': 43, 'labour': 44, 'maint': 45, 'logistics': 46, 'other': 47, 'sga': 50}
+    for r, key in MG_CV.items():
+        w.f(f'B{r}', f"={CONV}*'Cost Curve'!$K${CC_ROW[key]}", CR)
+    w.f('B50', f"={CONV}*('Cost Curve'!$K$45+'Cost Curve'!$K$47)", CR)
+    w.f('B51', '=SUM(B45:B50)', CR)
+    for r in range(45, 52):
+        w.f(f'C{r}', f'=IFERROR(B{r}/{REV},"")', PCT1)
+    rows.append(est_row(
+        'Cost ratio analysis - energy, logistics, labour and SG&A', 'B46:C49',
+        CONV_MIX_BASIS,
+        'Four cost heads were blank, leaving a cost-ratio table with two rows in it. They are now carved out '
+        'of other opex at the shared conversion shares, and other opex on row 50 is reduced to the residual '
+        'maintenance and other-manufacturing shares, so ROW 51 IS A LIVE SUM that still equals total opex. '
+        'This is the third sheet to decompose the same cash cost, and all three read the one set of shares '
+        'held on 11 Cost Curve - so the cost-ratio table here, the Rs-crore bridge on 13 EBITDA Model and '
+        'the Rs-per-tonne build-up on 11 Cost Curve are guaranteed to tell the same story.',
+        unit='Rs cr', linked='Cost Curve, Model Assumptions, Steel Supply Model', value='=B51', numfmt=CR,
+        method='Conversion cost apportioned at the shared shares held in column K of 11 Cost Curve',
+        formula="='Cost Curve'!$C$80*(1-'Model Assumptions'!$D$20)*'Steel Supply Model'!$C$101/10"
+                "*'Cost Curve'!$K$43",
+        primary='Shared conversion cost mix - one definition, four sheets',
+        secondary='11 Cost Curve states the identical split per tonne; 13 EBITDA Model in Rs crore',
+        cross='Row 51 must equal cash cost multiplied by finished production, and must equal total opex on '
+              '13 EBITDA Model row 42',
+        conf='Low for the split, High for the total',
+        freq='Annually'))
     for r in (45, 50, 51):
         w.f(f'C{r}', f'=IFERROR(B{r}/{REV},"")', PCT1)
-    nas.append(na_row('Cost ratio analysis: energy, logistics, labour and SG&A', 'B46:C49', inside,
-                      unit='Rs cr'))
 
     # ---- margin benchmark rows 56-60
     for r, ept, cost in MG_CO:
@@ -756,31 +887,69 @@ def working_capital(wb, audit, eng):
     w = SheetWriter(ws, audit)
     rows, nas = [], []
 
+    # Component ratios to net working capital days, held in column K so they are visible and
+    # editable. The five signed ratios sum to 1.00, so the decomposition always reconciles to
+    # driver D18 and rescales with it when the scenario changes.
+    for r, label, ratio, sign in WC_MIX:
+        w.est(f'K{r}', ratio, '0.0000')
     for i, (nc, lc) in enumerate(zip(NEW8, LEG)):
         w.link(f'{nc}12', f'=${lc}$72', CR)
         w.link(f'{nc}13', f'=${lc}$74', PCT1)
         w.link(f'{nc}14', f'=${lc}$71', NUM0)
-        w.link(f'{nc}24', f'=${lc}$72', CR)
         w.link(f'{nc}32', f'=${lc}$71', NUM0)
-        for r in (9, 10, 11):
-            w.na(f'{nc}{r}', NA['wc_detail'])
-        for r in (19, 20, 21, 22, 23):
-            w.na(f'{nc}{r}', NA['wc_detail'])
-        for r in (29, 30, 31):
-            w.na(f'{nc}{r}', NA['wc_detail'])
-    nas.append(na_row('Inventory, receivables and payables - balances and days',
-                      'B9:I11, B19:I23, B29:I31', NA['wc_detail'], unit='Rs cr and days'))
+        # balances: revenue x (ratio x net days) / 365
+        for r, label, ratio, sign in WC_MIX:
+            w.f(f'{nc}{r}', f'=${lc}$70*$K${r}*${lc}$71/365', CR)
+        w.f(f'{nc}24', f'={nc}19+{nc}20+{nc}21-{nc}22-{nc}23', CR)
+        # days
+        w.f(f'{nc}29', f'=$K$19*${lc}$71', NUM0)
+        w.f(f'{nc}30', f'=($K$20+$K$21)*${lc}$71', NUM0)
+        w.f(f'{nc}31', f'=($K$22+$K$23)*${lc}$71', NUM0)
+        # executive summary
+        w.f(f'{nc}9', f'={nc}19', CR)
+        w.f(f'{nc}10', f'={nc}20+{nc}21', CR)
+        w.f(f'{nc}11', f'={nc}22+{nc}23', CR)
+    rows.append(est_row(
+        'Working capital decomposition - inventory, receivables and payables',
+        'B9:I11, B19:I24, B29:I31', WC_MIX_BASIS, WC_MIX_REASONING,
+        unit='Rs cr and days', linked='Revenue Forecast, Model Assumptions', value='=I24', numfmt=CR,
+        method='Each component is a fixed ratio of net working capital days (column K), applied to revenue: '
+               'revenue x ratio x net days / 365',
+        formula='=$C$70*$K$19*$C$71/365 for the inventory balance; =$K$19*$C$71 for inventory days',
+        primary='Modelled decomposition of driver D18, which is itself NOT SOURCED',
+        secondary='Component levels are typical of Indian integrated producers; Tata Steel and JSW Steel '
+                  'disclose the components individually',
+        cross='ROW 24 IS THE TEST: it sums the five components and must equal research block row 72, the '
+              'driver-based net working capital, in every year and every scenario. Row 32 cash conversion '
+              'cycle must equal inventory days plus receivable days less payable days, which must equal '
+              'the driver on row 71.',
+        conf='Low - the driver is unsourced and the split is modelled. MUST be replaced with disclosed '
+             'receivable, inventory and payable days before transaction use.',
+        freq='Quarterly, on each results season'))
 
     # ---- working capital drivers rows 37-42
     for i, nc in enumerate(NEW7):
         lc, pc = FLEG[i], LEG[i]
         w.f(f'{nc}37', f"=IFERROR('Revenue Forecast'!{lc}96/'Revenue Forecast'!{pc}96-1,\"\")", PCT1)
         w.f(f'{nc}38', f"=IFERROR('Steel Supply Model'!{lc}101/'Steel Supply Model'!{pc}101-1,\"\")", PCT1)
-        for r in (39, 40, 41):
-            w.na(f'{nc}{r}', NA['wc_detail'])
+        w.f(f'{nc}39', f'=$K$19*${lc}$71', NUM0)
+        w.f(f'{nc}40', f'=($K$20+$K$21)*${lc}$71', NUM0)
+        w.f(f'{nc}41', f'=($K$22+$K$23)*${lc}$71', NUM0)
         w.link(f'{nc}42', f'=${lc}$73', CR)
-    nas.append(na_row('Inventory, collection and payment days by year', 'B39:H41', NA['wc_detail'],
-                      unit='days'))
+    rows.append(est_row(
+        'Working capital driver days by year', 'B39:H41', WC_MIX_BASIS,
+        'The driver table repeated the same three day-counts that the days table above computes, and all '
+        'three rows were blank. They now read from the same component ratios in column K, so the two '
+        'tables cannot disagree - which is the whole reason for holding the ratios in one place rather '
+        'than typing the days twice.',
+        unit='days', linked='Model Assumptions', value='=H39', numfmt=NUM0,
+        method='Component ratio in column K multiplied by net working capital days for the year',
+        formula='=$K$19*$D$71',
+        primary='Modelled decomposition of driver D18',
+        secondary='Identical to rows 29 to 31, by construction',
+        cross='Must equal rows 29 to 31 exactly; inventory plus collection less payment days must equal '
+              'the net working capital driver',
+        conf='Low', freq='Quarterly'))
 
     # ---- cash locked rows 47-53
     for i, r in enumerate(range(47, 54)):
@@ -844,17 +1013,11 @@ def cash_flow(wb, audit, eng):
     for i, (nc, lc) in enumerate(zip(NEW8, LEG)):
         w.link(f'{nc}9', f'=${lc}$96', CR)
         w.f(f'{nc}10', f'={lc}96-{lc}102-{lc}113', CR)
-        if i == 0:
-            for r in (11, 12, 13, 14, 15):
-                w.na(f'{nc}{r}', NO_FY26_CAPEX)
-        else:
-            w.link(f'{nc}11', f'=${lc}$110', CR)
-            w.link(f'{nc}12', f'=${lc}$114', CR)
-            w.f(f'{nc}13', f'=IFERROR({lc}114/{lc}97,"")', PCT1)
-            w.link(f'{nc}14', f'=${lc}$115', PCT1)
-            w.f(f'{nc}15', f'={lc}114' if i == 1 else f'={NEW8[i - 1]}15+{lc}114', CR)
-    nas.append(na_row('FY2026A capex, free cash flow, FCF margin, cash conversion and cumulative FCF',
-                      'B11:B15', NO_FY26_CAPEX, unit='Rs cr'))
+        w.link(f'{nc}11', f'=${lc}$110', CR)
+        w.link(f'{nc}12', f'=${lc}$114', CR)
+        w.f(f'{nc}13', f'=IFERROR({lc}114/{lc}97,"")', PCT1)
+        w.link(f'{nc}14', f'=${lc}$115', PCT1)
+        w.f(f'{nc}15', f'={lc}114' if i == 0 else f'={NEW8[i - 1]}15+{lc}114', CR)
 
     # ---- cash flow build-up rows 20-26 and cash generation rows 71-74
     for i, (nc, lc) in enumerate(zip(NEW8, LEG)):
@@ -870,21 +1033,15 @@ def cash_flow(wb, audit, eng):
         w.link(f'{nc}71', f'=${lc}$96', CR)
         w.f(f'{nc}72', f'={lc}96-{lc}102-{lc}113', CR)
         w.f(f'{nc}73', f'=IFERROR({nc}72/{nc}71,"")', PCT1)
-        if i == 0:
-            for r in (24, 25, 26, 40, 41, 44, 74):
-                w.na(f'{nc}{r}', NO_FY26_CAPEX)
-            w.inp(f'{nc}42', 0, CR)
-            w.inp(f'{nc}43', 0, CR)
-        else:
-            w.f(f'{nc}24', f'=-{lc}109', CR)
-            w.f(f'{nc}25', f'=-{lc}107', CR)
-            w.f(f'{nc}26', f'={nc}23+{nc}24+{nc}25', CR)
-            w.f(f'{nc}40', f'=-{lc}109', CR)
-            w.f(f'{nc}41', f'=-{lc}107', CR)
-            w.inp(f'{nc}42', 0, CR)
-            w.inp(f'{nc}43', 0, CR)
-            w.f(f'{nc}44', f'=SUM({nc}40:{nc}43)', CR)
-            w.link(f'{nc}74', f'=${lc}$114', CR)
+        w.f(f'{nc}24', f'=-{lc}109', CR)
+        w.f(f'{nc}25', f'=-{lc}107', CR)
+        w.f(f'{nc}26', f'={nc}23+{nc}24+{nc}25', CR)
+        w.f(f'{nc}40', f'=-{lc}109', CR)
+        w.f(f'{nc}41', f'=-{lc}107', CR)
+        w.inp(f'{nc}42', 0, CR)
+        w.inp(f'{nc}43', 0, CR)
+        w.f(f'{nc}44', f'=SUM({nc}40:{nc}43)', CR)
+        w.link(f'{nc}74', f'=${lc}$114', CR)
     rows.append(_sup(
         'Cash flow build-up', '=I26', 'Rs cr',
         'Computed in-cell: EBITDA less cash tax less change in working capital gives operating cash flow, '
@@ -903,14 +1060,33 @@ def cash_flow(wb, audit, eng):
     # ---- financing cash flow rows 49-55
     for i, (nc, lc) in enumerate(zip(NEW8, LEG)):
         if i == 0:
-            w.na(f'{nc}51', 'Interest is modelled from FY2027E only, on the net debt roll-forward that '
-                            'starts from the FY2026A closing balance of Rs 1,85,001 cr.')
+            w.inp(f'{nc}51', 0, CR)
         else:
             w.f(f'{nc}51', f"=-'Capital Allocation'!{lc}79", CR)
-        for r in (49, 50, 52, 53, 54, 55):
-            w.na(f'{nc}{r}', NA['financing'])
-    nas.append(na_row('Debt raised, debt repaid, dividends, buybacks, equity raised and net financing '
-                      'cash flow', 'B49:I50, B52:I55', NA['financing'], unit='Rs cr'))
+        # Debt raised, debt repaid, dividends, buybacks and equity raised are DELIBERATE
+        # ZEROS, not gaps: this is an unlevered industry aggregate that applies every rupee
+        # of free cash flow to net debt. A zero is the modelling statement; a blank was not.
+        for r in (49, 50, 52, 53, 54):
+            w.inp(f'{nc}{r}', 0, CR)
+        w.f(f'{nc}55', f'=SUM({nc}49:{nc}54)', CR)
+    rows.append(est_row(
+        'Financing cash flow - deliberate zeros', 'B49:I50, B52:I55', NA['financing'],
+        'These rows were blank and flagged as missing data. That was the wrong classification: nothing '
+        'about them is unknown. The model is an unlevered industry aggregate that applies every rupee of '
+        'free cash flow to net debt, so debt raised, debt repaid, dividends, buybacks and equity issuance '
+        'are all zero BY CONSTRUCTION. A deliberate zero belongs in the cell as a blue input - it makes the '
+        'financing section add up, row 55 becomes a live SUM, and the reader can see that the model takes no '
+        'view on capital structure rather than wondering whether the numbers are simply missing. Interest '
+        'paid is the one non-zero line and it is illustrative only: it does not feed free cash flow. '
+        'Substitute a company financing plan when this model is used for a single-name valuation.',
+        unit='Rs cr', linked='Capital Allocation', value='=C51', numfmt=CR,
+        method='Deliberate zeros; interest paid links to the illustrative line on 17 Capital Allocation',
+        formula="=-'Capital Allocation'!C79 for interest; entered zero for every other line",
+        primary='Modelling decision, not an estimate',
+        secondary='Row 91 of 17 Capital Allocation states the same convention',
+        cross='Net financing cash flow on row 55 is a live SUM of the rows above it',
+        conf='High - this is a stated convention, not an uncertain quantity',
+        freq='n/a - changes only if the model is given a capital structure'))
     rows.append(_sup(
         'Interest paid', '=C51', 'Rs cr',
         'Cross-sheet reference to the illustrative interest line on 17 Capital Allocation',
@@ -931,16 +1107,15 @@ def cash_flow(wb, audit, eng):
 
     # ---- free cash flow bridge rows 60-66
     for i, (nc, lc) in enumerate(zip(NEW8, LEG)):
-        if i <= 1:
+        if i == 0:
             for r in range(60, 66):
                 w.na(f'{nc}{r}',
-                     'A free cash flow bridge needs a PRIOR-YEAR free cash flow. FY2026A has none because '
-                     'the capex block is forecast-only, and FY2027E has none because its prior year is '
-                     'FY2026A. The bridge therefore begins at FY2028E. ' + NO_FY26_CAPEX)
-            if i == 1:
-                w.link(f'{nc}66', f'=${lc}$114', CR)
-            else:
-                w.na(f'{nc}66', NO_FY26_CAPEX)
+                     'NOT APPLICABLE rather than unavailable. A free cash flow bridge decomposes the CHANGE '
+                     'in free cash flow, so it needs a prior year. FY2026A is the first year of the model '
+                     'and has no FY2025 comparative, so there is nothing to bridge from. The bridge begins '
+                     'at FY2027E, which is now possible because the FY2026A capex and free cash flow column '
+                     'has been completed.')
+            w.link(f'{nc}66', f'=${lc}$114', CR)
         else:
             pc = LEG[i - 1]
             w.f(f'{nc}60', f'=${pc}$114', CR)
@@ -950,9 +1125,12 @@ def cash_flow(wb, audit, eng):
             w.f(f'{nc}64', f'=-({lc}102-{pc}102)', CR)
             w.inp(f'{nc}65', 0, CR)
             w.link(f'{nc}66', f'=${lc}$114', CR)
-    nas.append(na_row('Free cash flow bridge, FY2026A and FY2027E columns', 'B60:C65',
-                      'The bridge needs a prior-year free cash flow, which does not exist before FY2027E '
-                      'because the capex block is forecast-only.', unit='Rs cr'))
+    nas.append(na_row('Free cash flow bridge, FY2026A column', 'B60:B65',
+                      'NOT APPLICABLE rather than unavailable. The bridge decomposes the change in free '
+                      'cash flow and FY2026A is the first year of the model, so it has no comparative to '
+                      'bridge from. The FY2027E column now resolves, because the FY2026A capex and free '
+                      'cash flow column has been completed - previously the bridge could not start until '
+                      'FY2028E.', unit='Rs cr'))
     rows.append(_sup(
         'Free cash flow bridge', '=I66', 'Rs cr',
         'Exact four-factor decomposition of the change in unlevered free cash flow',

@@ -4,8 +4,10 @@ from openpyxl.styles import Font, Alignment
 
 from .style import (SheetWriter, link_to, PCT0, PCT1, PCT2, NUM0, NUM1, NUM2, MT, MTS, RS, CR,
                     X1, X2, SCORE, USD, TEXT, PPT)
-from .support import na_row
+from .support import na_row, est_row
 from .spec import NA
+from .estimates import (MACRO_BETA, WPI_SPREAD, LEADING, SECTOR_MIX, SECTOR_MIX_BASIS,
+                        DEMAND_WEIGHTS, DEMAND_WEIGHTS_BASIS, PERCAP, PERCAP_BASIS)
 
 LEG = 'CDEFGHIJ'      # legacy block: FY2026A .. FY2033E
 NEW8 = 'BCDEFGHI'     # new table:    FY2026A .. FY2033E
@@ -36,19 +38,27 @@ def control_panel(wb, audit):
         ('H6', '=IF(COUNT(\'Model Calibration\'!$D$10:$D$14)=5,"OK","CHECK")',
          'Database connected', 'Counts the five FY2026A industry calibration anchors imported from the '
          'Master Industry Database.'),
-        ('H7', '=IF(COUNT(\'Model Assumptions\'!$E$8:$K$33)=182,"OK","CHECK")',
-         'Assumptions complete', 'All 26 drivers must resolve to a number in all seven forecast years: '
-         '26 x 7 = 182. Identical to check A28 on 25 Audit Checks.'),
-        ('H8', '=IF(AND(ISNUMBER(\'Model Calibration\'!$D$19),ISNUMBER(\'Model Calibration\'!$D$21),'
-               'ABS(\'Model Calibration\'!$D$19-\'Model Calibration\'!$D$21-\'Model Calibration\'!$D$20)<1),'
-               '"OK","CHECK")',
+        ('H7', '=IF(COUNT(\'Model Assumptions\'!$E$8:$K$33)=ROWS(\'Model Assumptions\'!$E$8:$K$33)'
+               '*COLUMNS(\'Model Assumptions\'!$E$8:$K$33),"OK","CHECK")',
+         'Assumptions complete', 'Every driver cell must hold a number: the count of numbers in the block '
+         'must equal the number of cells in the block. SIMPLIFIED - this test previously compared the count '
+         'against the hard-coded constant 182, which nobody can verify by eye; ROWS x COLUMNS states the '
+         'same thing and stays correct if a driver is ever added. Identical to check A28 on 25 Audit Checks.'),
+        ('H8', '=IF(ABS(\'Model Calibration\'!$D$19-\'Model Calibration\'!$D$21-\'Model Calibration\'!$D$20)'
+               '<1,"OK","CHECK")',
          'Calibration complete', 'Realisation less cash cost must equal EBITDA per tonne at the FY2026A '
-         'calibration anchors: 59,974 - 49,241 = 10,733.'),
+         'calibration anchors: 59,974 - 49,241 = 10,733. SIMPLIFIED - two ISNUMBER guards were removed. '
+         'They did nothing useful: if a calibration anchor is ever replaced by text the subtraction fails '
+         'and you want to SEE that failure, not have it quietly reported as CHECK.'),
         ('H9', '=IF(COUNT(\'EBITDA Model\'!$D$103:$J$103)=7,"OK","CHECK")',
-         'Forecast built', 'All seven forecast years of industry EBITDA must be numeric.'),
-        ('H10', '=IFERROR(IF(\'Audit Checks\'!$C$44="PASS","OK",\'Audit Checks\'!$C$44),"CHECK")',
-         'Audit passed', 'Mirrors the OVERALL result of the thirty validations on 25 Audit Checks. WARN is '
-         'expected in the Bear and Stress cases.'),
+         'Forecast built', 'All seven forecast years of industry EBITDA must be numeric. The 7 is left as a '
+         'literal because D103:J103 is visibly seven cells.'),
+        ('H10', '=IF(\'Audit Checks\'!$C$44="PASS","OK",\'Audit Checks\'!$C$44)',
+         'Audit passed', 'Mirrors the OVERALL result of the thirty validations on 25 Audit Checks, and shows '
+         'that result verbatim when it is anything other than a clean PASS. WARN is expected in the Bear and '
+         'Stress cases. SIMPLIFIED - the IFERROR wrapper was removed because it masked exactly the condition '
+         'you most need to see: a broken link to the audit sheet. The pass-through of the real status text is '
+         'kept, because "PASS WITH WARNINGS" tells you more than "CHECK" does.'),
         ('H11', '=IF(COUNT(\'Industry Dashboard\'!$D$32:$J$32)=7,"OK","CHECK")',
          'Dashboard updated', 'The dashboard demand line must be live across all seven forecast years.'),
     ]
@@ -238,17 +248,63 @@ def macro(wb, audit):
     for nc in 'CDEFGHI':
         w.f(f'{nc}23', '=$B$23', USD)
 
-    orange = {
-        14: ('Industrial production growth (IIP)', NA['macro_sub']),
-        15: ('Manufacturing GVA growth', NA['macro_sub']),
-        16: ('Infrastructure growth', NA['macro_sub']),
-        17: ('Construction growth', NA['macro_sub']),
-        18: ('Auto production growth', NA['macro_sub']),
-        20: ('WPI inflation', NA['macro_sub']),
-    }
-    for r, (label, why) in orange.items():
-        w.narow(NEW8, r, why)
-        na_groups.append(na_row(label, f'B{r}:I{r}', why, unit='%'))
+    # ---- macro sub-series, rows 14-18 and 20.
+    # MODELLED, not left blank. No institution publishes an India path for these to FY2033,
+    # so each is expressed as a documented beta to real GDP growth (row 13) - or, for WPI,
+    # as a spread to CPI (row 19). The beta lives in one cell per row, column K, so a
+    # reader can change one number and see the whole row move.
+    BETA_ROWS = [
+        (14, 'iip', 'Industrial production growth (IIP)'),
+        (15, 'mfggva', 'Manufacturing GVA growth'),
+        (16, 'infra', 'Infrastructure growth'),
+        (17, 'construction', 'Construction growth'),
+        (18, 'auto', 'Auto production growth'),
+    ]
+    for r, key, label in BETA_ROWS:
+        beta, basis = MACRO_BETA[key]
+        w.est(f'K{r}', beta, X2)
+        for col in NEW8:
+            w.f(f'{col}{r}', f'={col}13*$K${r}', PCT1)
+        rows.append(est_row(
+            label, f'B{r}:I{r}',
+            basis + ' The beta itself is in K' + str(r) + ', so it is a single editable number.',
+            'Every one of these series is published as an actual by MOSPI, and none is published as a '
+            'forecast to FY2033 by anybody. The choice was between leaving the row blank - which is what '
+            'the previous build did - and modelling it off the one macro variable the workbook does '
+            'source, which is the RBI real GDP path. A beta to GDP is the standard way to carry a '
+            'derived macro series in an industry model, it is transparent because the multiplier is '
+            'visible in the cell next to the row, and it cannot go stale because it moves with GDP. '
+            'Replace the row with MOSPI actuals as they print.',
+            unit='%', linked='Model Assumptions, this sheet',
+            value=f'=I{r}', numfmt=PCT1,
+            method=f'Real GDP growth on row 13 multiplied by the beta in K{r}',
+            formula=f'=B13*$K${r}',
+            primary='Modelled: beta applied to the Reserve Bank of India real GDP path (driver D01)',
+            secondary='MOSPI publishes the actuals for every one of these series',
+            cross='Row 13 is the sourced GDP path; the scorecard below and 04 Steel Demand Model both '
+                  'read these rows, so a change here propagates consistently',
+            conf='Medium - modelled from a sourced driver, not itself sourced',
+            freq='Replace with the MOSPI actual as each series prints'))
+
+    spread, spread_basis = WPI_SPREAD
+    w.est('K20', spread, PCT1)
+    for col in NEW8:
+        w.f(f'{col}20', f'={col}19+$K$20', PCT1)
+    rows.append(est_row(
+        'WPI inflation', 'B20:I20', spread_basis,
+        'RBI publishes WPI as an actual but forecasts only CPI, so a WPI path can only be derived. '
+        'Carrying it as a spread to the sourced CPI path keeps the two series consistent with each other, '
+        'which matters because the model indexes conversion cost to CPI: if WPI were entered '
+        'independently the sheet could show WPI and CPI moving in opposite directions while cost '
+        'inflation followed neither.',
+        unit='%', linked='Model Assumptions, this sheet', value='=I20', numfmt=PCT1,
+        method='CPI inflation on row 19 plus the spread in K20',
+        formula='=B19+$K$20',
+        primary='Modelled: spread applied to the Reserve Bank of India CPI path (driver D04)',
+        secondary='RBI publishes the WPI actual monthly',
+        cross='Row 19 is the sourced CPI path',
+        conf='Low - the CPI-WPI spread is volatile and this is a long-run average',
+        freq='Replace with the RBI WPI actual as it prints'))
 
     rows += [
         dict(item='Real GDP growth', value='=I13', unit='%',
@@ -317,17 +373,21 @@ def macro(wb, audit):
 
     # ---- economic scorecard rows 28-34
     score = [
-        (28, '=MEDIAN(0,100,(\'Model Assumptions\'!$E$8-0.04)/0.05*100)',
+        (28, '=MIN(100,MAX(0,(\'Model Assumptions\'!$E$8-4%)/5%*100))',
          'Real GDP growth scored on a 4.0% to 9.0% band',
          'The band spans the FY2021 COVID contraction recovery floor and the strongest post-liberalisation '
-         'prints. FY2027E of 6.6% scores 52.'),
-        (33, '=MEDIAN(0,100,(0.09-\'Model Assumptions\'!$D$159)/0.04*100)',
+         'prints. FY2027E of 6.6% scores 52. SIMPLIFIED - the clamp was MEDIAN(0,100,x), which is compact '
+         'but reads as a statistic rather than as a limit; MIN(100,MAX(0,x)) says "not below nought, not '
+         'above a hundred" in the order you read it. The band edges are written as percentages rather than '
+         'decimals so they match the units of the cell they are compared against.'),
+        (33, '=MIN(100,MAX(0,(9%-\'Model Assumptions\'!$D$159)/4%*100))',
          'Risk-free rate scored INVERSELY on a 5.0% to 9.0% band',
-         'A lower yield is better for a capital-intensive industry. The 10-year G-sec of 6.833% scores 54.'),
-        (34, '=MEDIAN(0,100,(0.08-\'Model Assumptions\'!$E$11)/0.06*100)',
+         'A lower yield is better for a capital-intensive industry. The 10-year G-sec of 6.833% scores 54. '
+         'SIMPLIFIED - MEDIAN clamp replaced by MIN/MAX; band edges written as percentages.'),
+        (34, '=MIN(100,MAX(0,(8%-\'Model Assumptions\'!$E$11)/6%*100))',
          'CPI inflation scored INVERSELY on a 2.0% to 8.0% band',
          'The band is the RBI target band widened by one percentage point either side. FY2027E of 5.1% '
-         'scores 48.'),
+         'scores 48. SIMPLIFIED - MEDIAN clamp replaced by MIN/MAX; band edges written as percentages.'),
     ]
     for r, formula, method, why in score:
         w.f(f'C{r}', formula, SCORE)
@@ -340,23 +400,83 @@ def macro(wb, audit):
                          reasoning=why, cross='Weights in column B sum to 1.00 across rows 28 to 34',
                          conf='Medium', linked='Model Assumptions', freq='Live', last='Live', numfmt=SCORE,
                          comments='Was blank.'))
-    for r in (29, 30, 31, 32):
-        w.narow('CD', r, NA['macro_sub'])
-    na_groups.append(na_row('Economic scorecard - infrastructure, manufacturing, construction and automobile',
-                            'C29:D32', NA['macro_sub'], unit='score 0-100'))
+    # ---- scorecard rows 29-32 now score off the modelled sub-series above
+    SCORE_ROWS = [(29, 16, 'Infrastructure', 0.04, 0.14), (30, 15, 'Manufacturing', 0.02, 0.10),
+                  (31, 17, 'Construction', 0.02, 0.12), (32, 18, 'Automobile', 0.00, 0.12)]
+    for r, src, label, lo, hi in SCORE_ROWS:
+        w.f(f'C{r}', f'=MIN(100,MAX(0,(C{src}-{lo:.0%})/{hi - lo:.0%}*100))', SCORE)
+        w.f(f'D{r}', f'=IF(C{r}>=60,"Strong",IF(C{r}>=40,"Neutral","Weak"))', TEXT)
+        rows.append(est_row(
+            f'Economic scorecard - {label}', f'C{r}:D{r}',
+            f'{label} growth scored on a {lo:.0%} to {hi:.0%} band, the same normalisation the GDP, '
+            'interest-rate and inflation rows already use. The band is the modeller\'s framework and is '
+            'written inside the formula so it is auditable.',
+            'These four scorecard rows were blank only because the growth series they score were blank. '
+            f'Now that row {src} carries a modelled path, the score follows arithmetically and the '
+            'weights in column B - which sum to 1.00 across rows 28 to 34 - actually add up to a '
+            'complete scorecard. A scorecard with four of its seven rows empty was worse than useless: '
+            'the weights implied a total that could not be struck.',
+            unit='score 0-100', linked='This sheet', value=f'=C{r}', numfmt=SCORE,
+            method=f'Row {src} normalised onto the band, clamped to 0-100 with MIN/MAX',
+            formula=f'=MIN(100,MAX(0,(C{src}-{lo:.0%})/{hi - lo:.0%}*100))',
+            primary='Computed from the modelled growth series on this sheet',
+            secondary='02 Model Assumptions supplies the sourced GDP and CPI paths underneath',
+            cross='Weights in column B sum to 1.00 across rows 28 to 34',
+            conf='Medium - the band is a framework and the input is modelled',
+            freq='Live'))
 
-    # ---- macro drivers of steel demand rows 39-46
-    for r in range(39, 47):
-        w.narow('CDEFGHI', r, NA['sector_split'])
-    na_groups.append(na_row('Macro drivers of steel demand, by sector', 'C39:I46', NA['sector_split'],
-                            unit='%'))
+    # ---- macro drivers of steel demand rows 39-46: sector growth off the same betas
+    SECTOR_BETA_ROWS = [(39, 'construction'), (40, 'infra'), (41, 'auto'), (42, 'engineering'),
+                        (43, 'capgoods'), (44, 'railways'), (45, 'oilgas'), (46, 'renewable')]
+    for r, key in SECTOR_BETA_ROWS:
+        beta, basis = MACRO_BETA[key]
+        w.est(f'K{r}', beta, X2)
+        for col in 'CDEFGHI':
+            w.f(f'{col}{r}', f'={col}13*$K${r}', PCT1)
+        rows.append(est_row(
+            f'Macro driver of steel demand - {ws[f"A{r}"].value}', f'C{r}:I{r}', basis,
+            'Sector growth rates modelled as betas to the sourced real GDP path, with the beta visible in '
+            f'K{r}. The qualitative steel-demand sensitivity already in column B is the owner\'s '
+            'judgement and is untouched; this table now puts a number against it. These rows are '
+            'PRESENTATIONAL - the demand forecast itself runs off the single GDP-times-elasticity link on '
+            '04 Steel Demand Model, so nothing here can quietly move the volume build.',
+            unit='%', linked='This sheet', value=f'=I{r}', numfmt=PCT1,
+            method=f'Real GDP growth on row 13 multiplied by the sector beta in K{r}',
+            formula=f'=C13*$K${r}',
+            primary='Modelled: beta applied to the RBI real GDP path (driver D01)',
+            secondary='Consistent with the same betas used on rows 14 to 18 above',
+            cross='Uses identical betas to the executive summary rows above, so the two tables agree',
+            conf='Medium - modelled from a sourced driver',
+            freq='Review annually against MOSPI sector GVA prints'))
 
     # ---- leading indicators rows 51-57
-    for r in range(51, 58):
-        w.narow('BCD', r, NA['macro_sub'])
-    na_groups.append(na_row('Leading indicators (PMI, core sector, infrastructure and government capex, '
-                            'housing completions, vehicle production, railway capex)',
-                            'B51:D57', NA['macro_sub']))
+    for i, (label, value, fmt, basis) in enumerate(LEADING):
+        r = 51 + i
+        w.est(f'B{r}', value, fmt)
+        if i == 0:
+            w.f(f'C{r}', f'=IF(B{r}>=55,"Expanding firmly",IF(B{r}>=50,"Expanding","Contracting"))', TEXT)
+            w.f(f'D{r}', f'=IF(B{r}>=55,"Supportive of steel demand",'
+                         f'IF(B{r}>=50,"Neutral","Negative for steel demand"))', TEXT)
+        else:
+            w.f(f'C{r}', f'=IF(B{r}>$B$13,"Growing above GDP",IF(B{r}>0,"Growing below GDP","Contracting"))',
+                TEXT)
+            w.f(f'D{r}', f'=IF(B{r}>=0.09,"Strongly supportive",IF(B{r}>=0.05,"Supportive",'
+                         f'IF(B{r}>0,"Mildly supportive","Negative")))', TEXT)
+        rows.append(est_row(
+            f'Leading indicator - {label}', f'B{r}:D{r}', basis,
+            'The whole block was blank. It is now populated with the last observed reading where one is '
+            'known and a modelled value off the documented beta where it is not, and the Trend and Impact '
+            'columns are FORMULAS that classify the reading rather than text somebody typed. That matters '
+            'because a hand-typed trend goes stale the moment the reading changes; a formula cannot. '
+            'Nothing in the model depends on this block - it is a dashboard for the reader.',
+            unit='index or %', linked='This sheet', value=f'=B{r}', numfmt=fmt,
+            method='Observed or modelled reading, with Trend and Impact resolved by formula',
+            formula='=IF(B51>=55,"Expanding firmly",...) for the trend classification',
+            primary='Indicative reading, or modelled off the documented GDP beta',
+            secondary='RBI Bulletin, MOSPI core-sector release and S&P Global PMI publish these monthly',
+            cross='Compared against the real GDP growth line on row 13 by the Trend formula',
+            conf='Low - indicative levels, not sourced prints',
+            freq='Monthly, on each PMI and core-sector release'))
 
     # ---- exchange rate impact rows 62-66
     fx = [
@@ -441,11 +561,15 @@ def macro(wb, audit):
              'is the realised FY2015-FY2026 outturn, not an assertion. Everything downstream - supply, '
              'utilisation, price, cost, margin, cash flow and valuation - follows from that single link, '
              'which is why the GDP and elasticity rows are the two most important cells in the workbook.'),
-        (86, 'WHAT IS NOT MODELLED. Industrial production, manufacturing GVA, sector-level infrastructure, '
-             'construction and automotive growth, WPI and the leading-indicator block above are left blank '
-             'and shaded orange. No institution publishes these to FY2033, and no FY2026 actual was '
-             'retrievable in this research cycle. They are carried as a structure for the user to populate '
-             'from MOSPI and RBI releases; nothing in the model depends on them.'),
+        (86, 'WHAT IS SOURCED AND WHAT IS MODELLED. Real GDP, CPI, the repo rate, USD/INR and Brent are '
+             'sourced observations or RBI projections. Industrial production, manufacturing GVA, '
+             'infrastructure, construction and automotive growth are MODELLED as documented betas to real '
+             'GDP growth, and WPI as a spread to CPI, because no institution publishes an India path for '
+             'any of them to FY2033. Each beta sits in column K beside its row, so it is a single visible '
+             'number a reader can change. The leading-indicator block carries last observed readings where '
+             'known and modelled values off the same betas where not. All of it is labelled Medium or Low '
+             'confidence in the reference register, and none of it feeds the volume build: macro reaches '
+             'steel demand through exactly one channel, real GDP growth times the elasticity.'),
     ]
     for r, text in outlook:
         c = ws.cell(r, 1, text)
@@ -494,12 +618,41 @@ def demand(wb, audit, eng):
         last='FY2026 (provisional)', numfmt=MT,
         comments='Six years of history were blank. RED fill marks the database-sourced cells.'))
 
-    # ---- sector-wise demand rows 35-44, total row 45
-    for r in range(35, 45):
-        w.narow(NEW8, r, NA['sector_split'])
-    for nc in 'CDEFGHI':
-        w.f(f'{nc}45', f'=IF(COUNT({nc}35:{nc}44)=0,"",SUM({nc}35:{nc}44))', PCT0)
-    na_groups.append(na_row('Sector-wise demand shares', 'B35:I44', NA['sector_split'], unit='% share'))
+    # ---- sector-wise demand rows 35-44, total row 45.
+    # MODELLED as a SHARE MIX that is normalised to sum to 1.00 in every year, not as ten
+    # independent growth rates. Independent growth rates would not reconcile to total
+    # consumption and the error would compound silently through the demand build - which is
+    # exactly the risk the previous build cited as its reason for leaving the block blank.
+    # Column K holds the FY2033E target share, so the drift is a visible, editable input.
+    for i, (label, s26, s33) in enumerate(SECTOR_MIX):
+        r = 35 + i
+        w.est(f'B{r}', s26, PCT0)
+        w.est(f'K{r}', s33, PCT0)
+        for j, col in enumerate('CDEFGHI', start=1):
+            raw = f'($B${r}+($K${r}-$B${r})*{j}/7)'
+            w.f(f'{col}{r}', f'={raw}/SUM($B$35:$B$44)', PCT0)
+    for nc in 'BCDEFGHI':
+        w.f(f'{nc}45', f'=SUM({nc}35:{nc}44)', PCT0)
+    rows.append(est_row(
+        'Sector-wise demand share mix', 'B35:I44', SECTOR_MIX_BASIS,
+        'The block was entirely blank, and the stated reason was that an invented split would propagate '
+        'silently into the demand mix. That reasoning was right about the risk and wrong about the '
+        'remedy. Modelling the block as a normalised SHARE MIX removes the risk completely: the shares '
+        'are forced to sum to 1.00 in every year by construction, so no arithmetic can leak, and the '
+        'total row is a live SUM that proves it. The FY2026A share is in column B and the FY2033E target '
+        'in column K, with a linear drift between them, so the two numbers a reader would want to argue '
+        'about are the only two numbers entered.',
+        unit='% share', linked='This sheet', value='=B35', numfmt=PCT0,
+        method='FY2026A share drifting linearly to the FY2033E target in column K, normalised so the '
+               'ten shares sum to 1.00 in every year',
+        formula='=($B$35+($K$35-$B$35)*1/7)/SUM($B$35:$B$44)',
+        primary='Modelled: indicative FY2026A decomposition of finished steel consumption',
+        secondary='Published estimates put building and construction at roughly half of Indian finished '
+                  'steel demand; this mix puts construction plus infrastructure at 53%',
+        cross='Row 45 is a live SUM and must read 100% in every column, FY2026A through FY2033E',
+        conf='Medium for the aggregate construction-plus-infrastructure block, Low for the individual '
+             'sector lines',
+        freq='Review annually against Ministry of Steel and worldsteel end-use data'))
 
     # ---- demand drivers rows 50-56
     for nc, lc in zip('CDEFGHI', 'DEFGHIJ'):
@@ -511,16 +664,39 @@ def demand(wb, audit, eng):
     w.f('J56', '="Exports are "&TEXT(\'Trade Model\'!$C$84,"0.0%")&" of finished production in FY2026A and "'
                 '&TEXT(\'Trade Model\'!$J$84,"0.0%")&" in FY2033E. India is a domestic market; exports are '
                 'the residual, not the driver."', TEXT)
-    w.na('B50', 'A weighting scheme across demand drivers is not asserted. The model uses a single '
-                'top-down channel - real GDP growth times elasticity - so a multi-driver weighting would '
-                'be decorative and would imply a decomposition the model does not perform.')
-    for r in range(51, 56):
-        w.na(f'B{r}', 'A weighting scheme across demand drivers is not asserted - see the note on B50.')
-        w.narow('CDEFGHI', r, NA['sector_split'])
-        w.na(f'J{r}', NA['sector_split'])
-    w.na('B56', 'A weighting scheme across demand drivers is not asserted - see the note on B50.')
-    na_groups.append(na_row('Demand driver weights, and sector driver growth rates',
-                            'B50:B56 and C51:I55', NA['sector_split']))
+    # ---- demand driver weights, rows 50-56.
+    # The growth rates are LINKS to 03 Macroeconomic Model, so this table can never
+    # disagree with the macro sheet, and the weights are a stated framework summing to 1.00.
+    for i, (label, weight, tmpl) in enumerate(DEMAND_WEIGHTS):
+        r = 50 + i
+        w.est(f'B{r}', weight, PCT0)
+        if tmpl and r not in (50, 56):
+            for nc in 'CDEFGHI':
+                w.link(f'{nc}{r}', tmpl.format(c=nc), PCT1)
+        if r not in (50, 56):
+            w.f(f'J{r}', f'="Weight "&TEXT($B{r},"0%")&". Contributes "'
+                         f'&TEXT($B{r}*I{r},"0.0%")&" to the FY2033E weighted signal."', TEXT)
+    w.f('B57', '=SUM(B50:B56)', PCT0)
+    w.f('J57', '="Weights sum to "&TEXT($B$57,"0%")&". This table is presentational: the demand forecast '
+               'itself runs off real GDP growth times the elasticity on row 114."', TEXT)
+    rows.append(est_row(
+        'Demand driver weights and growth rates', 'B50:J56', DEMAND_WEIGHTS_BASIS,
+        'The weights column was blank on the stated grounds that a multi-driver weighting would be '
+        '"decorative" because the model uses a single top-down channel. The table exists on the sheet, '
+        'though, and an empty weights column in a table headed "Weight" is worse than a stated framework: '
+        'it reads as an omission rather than as a decision. The weights are now filled in, they sum to '
+        '1.00 on a live SUM in B57, the growth rates are live links to 03 Macroeconomic Model so they '
+        'cannot drift from it, and the Impact column states in words that the block is presentational and '
+        'does not feed the volume build.',
+        unit='weight and %', linked='Macroeconomic Model, Trade Model', value='=B57', numfmt=PCT0,
+        method='Stated weights; growth rates linked to 03 Macroeconomic Model; impact text built with '
+               'TEXT() so it cannot go stale',
+        formula="='Macroeconomic Model'!C17 for construction growth",
+        primary='Modelled framework for the weights; growth rates inherited from the macro sheet',
+        secondary='The GDP row and the exports row were already live before this change',
+        cross='B57 is a live SUM and must read 100%',
+        conf='Medium - the weights are a framework, the inputs are all live model links',
+        freq='Live'))
 
     # ---- per capita analysis rows 61-68
     for i, r in enumerate(range(61, 69)):
@@ -548,10 +724,23 @@ def demand(wb, audit, eng):
     w.db('B73', 115.7, NUM1, ref="='[Master Industry Database.xlsx]Demand & Consumption'!$E$45")
     w.db('B74', 604.0, NUM1, ref="='[Master Industry Database.xlsx]Demand & Consumption'!$E$47")
     w.db('B78', 215.0, NUM1, ref="='[Master Industry Database.xlsx]Demand & Consumption'!$E$46")
-    for r in (75, 76, 77):
-        w.na(f'B{r}', NA['intl'])
-    na_groups.append(na_row('Per capita consumption - Japan, South Korea and the USA', 'B75:B77',
-                            NA['intl'], unit='kg'))
+    for i, (country, kg) in enumerate(PERCAP):
+        w.est(f'B{75 + i}', kg, NUM1)
+    rows.append(est_row(
+        'Per capita consumption - Japan, South Korea and the USA', 'B75:B77', PERCAP_BASIS,
+        'Three blank cells were making a six-row comparison table unreadable. The point of the block is to '
+        'give India\'s 115.7 kg a scale, and it cannot do that with the three developed-market rows empty. '
+        'Indicative figures are now carried, clearly labelled Medium confidence, and nothing in the model '
+        'reads them.',
+        unit='kg', linked='This sheet', value='=B76', numfmt=NUM1,
+        method='Indicative per-capita apparent steel use, order of magnitude',
+        formula='(entered value)',
+        primary='Indicative, consistent with worldsteel apparent steel use per capita',
+        secondary='India, China and the world average on rows 73, 74 and 78 ARE sourced, from the Master '
+                  'Industry Database',
+        cross='India at 115.7 kg must remain roughly 54% of the world average of 215 kg',
+        conf='Medium - indicative levels, not exact prints',
+        freq='Annually, on each World Steel in Figures release'))
     rows.append(dict(
         item='International per capita comparison', value='=B73/B78', unit='x world average',
         method='Master Industry Database import (RED)',
