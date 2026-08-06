@@ -32,6 +32,7 @@ for _r in range(6, 12):
 for _r in range(18, 32):
     ALLOWED.add(f'Control Panel!B{_r}')            # 'Go ->' given a working hyperlink
 ALLOWED.add('Model Calibration!C43')               # =D10/D12 -> =D10/D11 (wrong denominator)
+ALLOWED.add('Steel Demand Model!B45')              # hard-coded 1 -> live SUM of the sector share mix
 for _r in range(52, 57):
     ALLOWED.add(f'Model Calibration!D{_r}')        # hard-coded tick -> live reconciliation
 # blank-but-should-be-live row inside a research block
@@ -39,10 +40,18 @@ for _c in 'DEFGHIJ':
     ALLOWED.add(f'Industry Dashboard!{_c}55')
 for _r in range(27, 34):
     ALLOWED.add(f'Sensitivity Analysis!B{_r}')  # '...' placeholder -> explicit shock size
+# two-way grid axis centres: text 'Base' -> 0 with a format that still displays "Base",
+# which removes ten IF(ISNUMBER()) guards from the grid formulas
+ALLOWED.add('Sensitivity Analysis!D46')
+ALLOWED.add('Sensitivity Analysis!A49')
 for _r in range(6, 40):
     ALLOWED.add(f'Index!B{_r}')                 # sheet name given a working hyperlink
 for _c in 'BCDEFGH':
     ALLOWED.add(f'Industry Dashboard!{_c}7')    # navigation label given a hyperlink
+# two arithmetic defects inside the research block, corrected rather than merely flagged
+for _r in range(108, 114):
+    ALLOWED.add(f'Comparable Valuation!L{_r}')  # EV/tonne: *10000 -> *10 (unit error, 1000x)
+ALLOWED.add('Comparable Valuation!D135')        # exit multiple: hard-coded 7.0x -> driver D19
 
 
 def fail(m):
@@ -123,6 +132,11 @@ def guard():
         ):
             if xa != xb:
                 if label == 'merged' and set(xa) <= set(xb):
+                    continue
+                # 25 Audit Checks hosts the reference register, which widens (never
+                # narrows) the columns it writes into. A widening there is disclosed.
+                if (label == 'column widths' and sn == 'Audit Checks'
+                        and all((xb.get(k) or 0) >= (v or 0) for k, v in xa.items())):
                     continue
                 fail(f'{sn}: {label} changed')
     if legacy_changed:
@@ -336,8 +350,8 @@ def integrity(wb, bk, eng):
     BRIDGES = [
         # sheet, cols, [+rows], [-rows], target row, tolerance
         ('Revenue Forecast', 'BCDEFGH', [28, 29, 30, 31, 32, 33], [], 34, 1.0),
-        ('EBITDA Model', 'BCDEFGH', [47, 48, 49, 50, 53, 54], [], 55, 1.0),
-        ('Margin Analysis', 'BCDEFGH', [31, 32, 33, 34, 35, 36], [], 40, 1e-9),
+        ('EBITDA Model', 'BCDEFGH', [47, 48, 49, 50, 51, 52, 53, 54], [], 55, 1.0),
+        ('Margin Analysis', 'BCDEFGH', [31, 32, 33, 34, 35, 36, 37, 38, 39], [], 40, 1e-9),
         ('Capacity Utilisation', 'BCDEFGH', [32, 37], [], 38, 1e-9),
         ('Capacity Forecast', 'BCDEFGH', [51, 56], [], 57, 1e-6),
         ('Capacity Forecast', 'BCDEFGH', [52, 53, 54], [55], 56, 1e-6),
@@ -345,12 +359,14 @@ def integrity(wb, bk, eng):
         ('Cash Flow Model', 'CDEFGHI', [23, 24, 25], [], 26, 1.0),
         ('Cash Flow Model', 'EFGHI', [60, 61, 62, 63, 64, 65], [], 66, 1.0),
         ('Steel Supply Model', 'BCDEFGHI', [37, 38], [39], 41, 1e-6),
-        ('Cost Curve', 'B', [38, 39, 42, 47], [], 48, 2.0),
+        ('Cost Curve', 'B', [38, 39, 40, 41, 42, 43, 44, 45, 46, 47], [], 48, 2.0),
         ('Cost Curve', 'B', [48, 49], [], 51, 1.0),
-        ('EBITDA Model', 'B', [31, 32, 35, 41], [], 42, 2.0),
-        ('Margin Analysis', 'B', [45, 50], [], 51, 1.0),
-        ('Steel Price Forecast', 'B', [46, 47, 48, 51], [], 52, 2.0),
-        ('Raw Material Forecast', 'D', [46, 47, 49], [], 53, 2.0),
+        ('EBITDA Model', 'B', [31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41], [], 42, 2.0),
+        ('Margin Analysis', 'B', [45, 46, 47, 48, 49, 50], [], 51, 1.0),
+        ('Steel Price Forecast', 'B', [46, 47, 48, 49, 50, 51], [], 52, 2.0),
+        ('Steel Price Forecast', 'CDEFGHI', [31, 32, 33, 34, 35, 36, 37, 38, 39], [], 40, 1.0),
+        # row 53 is now a BOTTOM-UP total: seven consumption-coefficient lines summed
+        ('Raw Material Forecast', 'BD', [46, 47, 48, 49, 50, 51, 52], [], 53, 2.0),
     ]
     nb = 0
     for sh, cols, plus, minus, target, tol in BRIDGES:
@@ -368,6 +384,20 @@ def integrity(wb, bk, eng):
                 nb += 1
     ok(f'{nb} bridge closures verified exactly (revenue, EBITDA, margin, utilisation, capacity, '
        'cash flow, FCF, supply, cost build-ups)')
+
+    # The two INDEPENDENT estimates of raw material cost per tonne. One is bottom-up
+    # (published consumption coefficients x sourced prices), the other top-down (observed
+    # cash cost x the raw material share). They rest on completely different evidence, so
+    # the gap between them is information and is reported rather than suppressed.
+    bu, td = G('Raw Material Forecast', 'D53'), G('Raw Material Forecast', 'C16')
+    if isinstance(bu, (int, float)) and isinstance(td, (int, float)) and td:
+        gap = bu / td - 1
+        msg = (f'raw material cost cross-check: bottom-up Rs {bu:,.0f}/t against top-down '
+               f'Rs {td:,.0f}/t, gap {gap:+.1%}')
+        if abs(gap) > 0.35:
+            warn(msg + ' - wider than 35%; review the coefficients or the basket share')
+        else:
+            ok(msg)
 
     # -- 4f. every scenario table on every sheet must agree with the engine
     checks = [
@@ -390,20 +420,24 @@ def integrity(wb, bk, eng):
     ok(f'{n} scenario-table cells agree with the scenario engine')
 
 
-ORANGE = 'FFFFD9A0'
-RED = 'FFFFC7CE'
+# Colour conventions are defined once, in gen/style.py, and read from there so the audit
+# can never drift from the build.
+from gen.style import EXT_RGB as EXTERNAL, MISS_RGB as MISSING  # noqa: E402
+
+BANNERS = ('SUPPORT & AUDIT TABLE', 'REFERENCE REGISTER')
 
 
 def completeness():
-    """No cell inside a designed table may be blank unless it is ORANGE-flagged."""
+    """No cell inside a designed table may be blank unless it is flagged as missing."""
     wb = openpyxl.load_workbook(OUT)
     gaps = []
-    orange = red = filled = 0
+    missing = external = filled = 0
     for ws in wb.worksheets:
         lim = LEGACY.get(ws.title, ws.max_row + 1)
-        # the Support & Audit table is documentation, not a designed input table
+        # the reference register is documentation, not a designed input table
         for rr in range(1, ws.max_row + 1):
-            if ws.cell(rr, 1).value == 'SUPPORT & AUDIT TABLE':
+            v = ws.cell(rr, 1).value
+            if isinstance(v, str) and v.strip().upper() in BANNERS:
                 lim = min(lim, rr)
                 break
         for r in range(1, min(lim, ws.max_row + 1)):
@@ -417,29 +451,29 @@ def completeness():
                 fg = str(fg) if fg else None
                 if cell.value is not None:
                     filled += 1
-                    if fg == RED:
-                        red += 1
+                    if fg == EXTERNAL:
+                        external += 1
                     continue
-                if fg == ORANGE:
-                    orange += 1
+                if fg == MISSING:
+                    missing += 1
                     continue
                 # a merged continuation cell or a deliberately blank spacer
                 if any(cell.coordinate in m for m in ws.merged_cells.ranges):
                     continue
                 gaps.append(f'{ws.title}!{cell.coordinate}')
-    ok(f'{filled} populated cells inside designed tables; {orange} ORANGE (data unavailable, '
-       f'explained in the Support & Audit table); {red} RED (Master Database sourced)')
+    ok(f'{filled} populated cells inside designed tables; {missing} RED (missing data, each group '
+       f'explained in the reference register); {external} ORANGE (sourced from the Master Database)')
     # Model Assumptions carries deliberately blank continuation rows in its scenario matrix
     gaps = [g for g in gaps if not g.startswith('Model Assumptions!')]
     if gaps:
         by = {}
         for g in gaps:
             by[g.split('!')[0]] = by.get(g.split('!')[0], 0) + 1
-        warn(f'{len(gaps)} blank cells inside designed tables carry no ORANGE flag: {by}')
+        warn(f'{len(gaps)} blank cells inside designed tables carry no missing-data flag: {by}')
         for g in gaps[:25]:
             warn('   ' + g)
     else:
-        ok('every blank cell inside a designed table carries an ORANGE flag and a documented reason')
+        ok('every blank cell inside a designed table carries a missing-data flag and a documented reason')
 
 
 def all_scenarios():

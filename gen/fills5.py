@@ -4,8 +4,10 @@ from openpyxl.styles import Font, Alignment
 
 from .style import (SheetWriter, link_to, PCT0, PCT1, PCT2, NUM0, NUM1, NUM2, NUM3, MT, MTS, RS, CR,
                     X1, X2, USD, TEXT, SCORE, PPT)
-from .support import na_row
+from .support import na_row, est_row
 from .spec import NA
+from .estimates import (COMPANY_ROE, INDUSTRY_ROE, ROE_BASIS, ROE_REASONING,
+                        RISK_PROB, RISK_PROB_BASIS, RISK_PROB_REASONING)
 
 LEG = 'CDEFGHIJ'
 FLEG = 'DEFGHIJ'
@@ -16,8 +18,8 @@ SCEN = ['Base Case', 'Bull Case', 'Bear Case', 'Stress Case']
 LINKBLUE = 'FF0563C1'
 SCOL = 'BCDE'          # Base / Bull / Bear / Stress on the new scenario tables
 # Base-Case row of each driver in the scenario matrix on 02 Model Assumptions
-DRV = dict(gdp=38, fx=46, cpi=50, ore=74, coal=78, tax=94, capexint=98, nwcdays=106,
-           exitmult=110, wacc=114)
+DRV = dict(gdp=38, fx=46, cpi=50, convinf=82, ore=74, coal=78, tax=94, capexint=98,
+           nwcdays=106, exitmult=110, wacc=114)
 
 
 def _sup(item, value, unit, method, formula, primary, secondary, assumption, reasoning,
@@ -62,14 +64,33 @@ def scenario_manager(wb, audit, eng):
     w.link('F19', "='Model Assumptions'!$K$27", PCT1)
     w.link('F20', "='ESG Model'!$J$104", NUM0)
     w.f('F21', "=IFERROR('Model Assumptions'!$K$23/'Model Assumptions'!$J$23-1,\"\")", PCT1)
+    # Power and logistics inflation are not separate drivers: both sit inside conversion
+    # cost, which is indexed to CPI through driver D12. Rather than leave the rows blank,
+    # they READ D12 - which is the honest statement that the model inflates them at CPI.
+    for i, (col, sc) in enumerate(zip(SCOL, SCEN)):
+        for r in (15, 16):
+            w.link(f'{col}{r}', f"='Model Assumptions'!$K${DRV['convinf'] + i}", PCT1)
     for r in (15, 16):
-        w.narow('BCDEF', r, 'Power cost and logistics inflation are not scenario drivers. Both sit inside '
-                            'the CONVERSION COST block, which is indexed to RBI CPI through driver D12 - '
-                            'and D12 IS a scenario driver, on row 17 above. Adding separate power and '
-                            'freight paths would double-count the same inflation.')
-    nas.append(na_row('Power cost and logistics inflation by scenario', 'B15:F16',
-                      'Both are inside conversion cost, which is indexed to CPI through driver D12.',
-                      unit='%'))
+        w.link(f'F{r}', "='Model Assumptions'!$K$19", PCT1)      # driver D12, active value
+    rows.append(est_row(
+        'Power cost and logistics inflation by scenario', 'B15:F16',
+        'Both rows read driver D12, conversion cost inflation, which is the CPI-linked driver the model '
+        'actually uses to inflate every element of conversion cost including power and freight.',
+        'Ten blank cells, correctly explained as "not scenario drivers" - both sit inside the conversion cost '
+        'block. But that explanation is precisely what the cells should SAY rather than what a note beside '
+        'them should say. Pointing both rows at driver D12 states the model\'s treatment on the face of the '
+        'dashboard: power and logistics inflate at conversion cost inflation, no faster and no slower, and '
+        'they do flex by scenario because D12 does. It adds no new assumption and removes no disclosure, and '
+        'it means the scenario dashboard no longer has holes in the middle of it.',
+        unit='%', linked='Model Assumptions', value='=F15', numfmt=PCT1,
+        method='Cross-sheet link to driver D12, conversion cost inflation, by scenario',
+        formula="='Model Assumptions'!$K$82 for the Base Case column; $K$19 for the active value",
+        primary='Driver D12 on 02 Model Assumptions, itself anchored on the RBI CPI projection',
+        secondary='11 Cost Curve and 09 Steel Price Forecast decompose conversion cost into power, labour, '
+                  'maintenance, logistics, other manufacturing and SG&A',
+        cross='Both rows must equal row 17, general inflation, in every column - which is the point: the '
+              'model does not give power or freight an inflation path of their own',
+        conf='High - this is a statement of the model\'s structure', freq='Live'))
     rows.append(_sup(
         'Scenario dashboard', '=F9', 'various',
         'Cross-sheet reference to the FY2033E column of the SCENARIO DRIVER MATRIX on 02 Model Assumptions, '
@@ -280,18 +301,21 @@ def sensitivity(wb, audit, eng):
         'Medium', 'Comparable Valuation, Cash Flow Model', 'Live', 'FY2033E', 'Was entirely blank.', CR))
 
     # ---- two-way: iron ore against steel price, rows 47-51
-    def num(ref):
-        return f'IF(ISNUMBER({ref}),{ref},0)'
+    # SIMPLIFIED. Each of these 25 cells carried two IF(ISNUMBER(axis),axis,0) guards,
+    # present only because the centre of each axis held the text "Base" instead of a
+    # number. The two centre cells now hold 0 with a number format that still DISPLAYS
+    # "Base", so the axis is numeric throughout and the arithmetic is plain.
+    w.inp('D46', 0, '+0%;-0%;"Base"')
+    w.inp('A49', 0, '+0%;-0%;"Base"')
     for r in range(47, 52):
         for col in 'BCDEF':
             w.f(f'{col}{r}',
-                f'=({EB}+{P}*{num(f"{col}$46")}*{V}/10'
-                f'-{C_}*{SH}*{WT}*{num(f"$A{r}")}*{V}/10)*{MULT}', CR)
+                f'=({EB}+{P}*{col}$46*{V}/10'
+                f'-{C_}*{SH}*{WT}*$A{r}*{V}/10)*{MULT}', CR)
     rows.append(_sup(
         'Two-way enterprise value: iron ore against steel price', '=D49', 'Rs cr',
         'Computed in-cell: EBITDA re-struck for both shocks simultaneously, capitalised at the exit multiple',
-        '=(EBITDA+price effect-iron ore effect)*exit multiple, with IF(ISNUMBER()) guards so the "Base" '
-        'label in the header does not break the arithmetic',
+        '=(EBITDA+price effect-iron ore effect)*exit multiple',
         'Computed from the model', 'Section A tornado',
         'Both shocks are applied to the FY2033E terminal year only, and the exit multiple is held constant.',
         'The table shows the asymmetry that matters: a 10% steel price move is worth roughly three times a '
@@ -301,7 +325,9 @@ def sensitivity(wb, audit, eng):
         'The centre cell must equal base EBITDA multiplied by the exit multiple; the grid must be monotonic '
         'in both directions',
         'Medium', 'EBITDA Model, Cost Curve, Steel Price Forecast, Model Assumptions', 'Live', 'FY2033E',
-        'Was entirely blank.', CR))
+        'SIMPLIFIED. Ten IF(ISNUMBER()) guards were removed from this grid by putting a real 0 in the two '
+        'axis centre cells and letting the number format display the word "Base". The axis still reads '
+        '"Base" on screen and the formulas are now plain arithmetic.', CR))
 
     # ---- downside / upside table rows 56-63
     pair = {56: (20, 24), 57: (27, 26), 58: (28, 28), 59: (29, 29), 60: (30, 30), 63: (31, 31)}
@@ -359,10 +385,22 @@ def sensitivity(wb, audit, eng):
     w.f('B81', f"=IFERROR('Trade Model'!$J$83-'Trade Model'!$C$83,\"\")", PCT1)
     w.f('B82', f"=IFERROR('ESG Model'!$J$112/{EB},\"\")", PCT1)
     w.f('B83', f"=IFERROR(ABS(F32-'Comparable Valuation'!$D$138)/'Comparable Valuation'!$D$138,\"\")", PCT1)
-    for r in range(77, 84):
-        w.na(f'C{r}', NO_PROB)
-        w.na(f'D{r}', NO_PROB)
-    nas.append(na_row('Risk probability and risk score', 'C77:D83', NO_PROB))
+    for r, label, prob, _basis in RISK_PROB:
+        w.est(f'C{r}', prob, PCT0)
+        w.f(f'D{r}', f'=B{r}*C{r}', PCT2)
+    rows.append(est_row(
+        'Risk probability and risk score', 'C77:D83', RISK_PROB_BASIS + ' ' +
+        ' '.join(f'{label}: {b}' for _r, label, _p, b in RISK_PROB),
+        RISK_PROB_REASONING + ' ' + NO_PROB,
+        unit='% and score', linked='This sheet', value='=D77', numfmt=PCT2,
+        method='Stated annual probability; risk score is the measured impact multiplied by that probability',
+        formula='=B77*C77',
+        primary='Probabilities are a stated house view. THE IMPACT COLUMN IS MEASURED, from the model.',
+        secondary='Section A tornado quantifies each impact independently',
+        cross='The ranking by risk score should be read rather than the absolute scores; impact is the '
+              'measured column and probability the judgemental one',
+        conf='Low for the probabilities, Medium to High for the impacts they are multiplied by',
+        freq='Review at each results season and on any policy change'))
     rows.append(_sup(
         'Risk ranking - measured impact', '=B77', '% of FY2033E EBITDA',
         'Cross-sheet reference to the tornado in section A, plus three impacts computed directly',
@@ -418,7 +456,7 @@ def comparable_valuation(wb, audit, eng):
             w.link(f'E{r}', f'=$B${lr}', CR)
             w.link(f'F{r}', f'=$D${lr}', CR)
             w.link(f'H{r}', f'=$C${lr}', CR)
-        elif r == 25:
+        elif r == 25:  # noqa: E501 - branch kept for clarity against the original layout
             w.link(f'D{r}', f"='Revenue Forecast'!$C${rev}", CR)
             w.link(f'E{r}', f'=$B${lr}', CR)
             for col in 'BCFH':
@@ -427,7 +465,13 @@ def comparable_valuation(wb, audit, eng):
             w.link(f'D{r}', f"='Revenue Forecast'!$C${rev}", CR)
             for col in 'BCEFH':
                 w.na(f'{col}{r}', NO_LISTED)
-        w.na(f'G{r}', NO_BOOK)
+        # Book value derived by inverting ROE where a profit line exists.
+        if lr in COMPANY_ROE:
+            _name, roe = COMPANY_ROE[lr]
+            w.est(f'J{r}', roe, PCT1)
+            w.f(f'G{r}', f'=IFERROR($D${lr}/$J${r},"")', CR)
+        else:
+            w.na(f'G{r}', NO_BOOK)
     for r, rev, ebt in CV_SUPPORT:
         if rev is None:
             for col in 'BCDEFGH':
@@ -443,7 +487,24 @@ def comparable_valuation(wb, audit, eng):
         for col in 'BCFH':
             w.na(f'{col}{r}', NO_PRICE_SUPP)
         w.na(f'G{r}', NO_BOOK)
-    nas.append(na_row('Peer universe - book value for every name', 'G20:G34', NO_BOOK, unit='Rs cr'))
+    nas.append(na_row('Peer universe - book value for the supporting and unlisted names', 'G25:G34',
+                      NO_BOOK + ' Book value IS now derived for the five listed majors on rows 20 to 24, '
+                      'by inverting return on equity against their disclosed profit after tax. The '
+                      'supporting names have no profit line in the model, so the same derivation cannot be '
+                      'applied to them.', unit='Rs cr'))
+    rows.append(est_row(
+        'Book value of equity, listed majors', 'G20:G24', ROE_BASIS, ROE_REASONING,
+        unit='Rs cr', linked='This sheet', value='=G20', numfmt=CR,
+        method='Profit after tax divided by the assumed return on equity in column J',
+        formula='=IFERROR($D$108/$J$20,"")',
+        primary='Derived: profit after tax is disclosed per company; ROE is the modelled assumption',
+        secondary='The Master Industry Database carries total assets and borrowings but not equity',
+        cross='The resulting price-to-book multiples must sit in a plausible range - roughly 1.0x for SAIL '
+              'to about 3.0x for the Jindal entities - which is the test that the ROE assumptions are '
+              'sensible',
+        conf='Low - ROE is assumed, so book value inherits that uncertainty',
+        freq='Quarterly, on each results season; replace with the reported balance-sheet figure when '
+             'available'))
     nas.append(na_row('Peer universe - market capitalisation, enterprise value, earnings and net debt for '
                       'the supporting names and the two unlisted producers', 'B25:H34',
                       NO_PRICE_SUPP + ' ' + NO_LISTED, unit='Rs cr'))
@@ -482,18 +543,20 @@ def comparable_valuation(wb, audit, eng):
         else:
             for col in 'BCDFG':
                 w.na(f'{col}{r}', NO_PRICE_SUPP if peer > 26 else NO_LISTED)
-        w.na(f'E{r}', NO_BOOK)
+        if lr in COMPANY_ROE:
+            w.f(f'E{r}', f'=IFERROR($H${lr}/$G${peer},"")', X2)
+        else:
+            w.na(f'E{r}', NO_BOOK)
     stats = [(54, 'AVERAGE'), (55, 'MEDIAN'), (58, 'MAX'), (59, 'MIN')]
     for r, fn in stats:
-        for col in 'BCDFG':
-            w.f(f'{col}{r}', f'=IFERROR({fn}({col}39:{col}53),"")', X2 if col in 'BC' else RS)
-        w.na(f'E{r}', NO_BOOK)
+        for col in 'BCDEFG':
+            w.f(f'{col}{r}', f'=IFERROR({fn}({col}39:{col}53),"")', X2 if col in 'BCE' else RS)
     for r, q in ((56, 0.25), (57, 0.75)):
-        for col in 'BCDFG':
+        for col in 'BCDEFG':
             w.f(f'{col}{r}', f'=IFERROR(PERCENTILE({col}39:{col}53,{q}),"")',
-                X2 if col in 'BC' else RS)
-        w.na(f'E{r}', NO_BOOK)
-    nas.append(na_row('Price to book for every name and every statistic', 'E39:E59', NO_BOOK, unit='x'))
+                X2 if col in 'BCE' else RS)
+    nas.append(na_row('Price to book for the supporting and unlisted names', 'E44:E53', NO_BOOK,
+                      unit='x'))
     nas.append(na_row('Trading multiples for the supporting and unlisted names', 'B44:G53',
                       NO_PRICE_SUPP, unit='x'))
     rows.append(_sup(
@@ -549,23 +612,39 @@ def comparable_valuation(wb, audit, eng):
     w.link('B76', '=$D$55', X1)
     w.f('C76', f'={PAT26}', CR)
     w.f('D76', "=IFERROR(B76*C76+'Capital Allocation'!$C$80,\"\")", CR)
-    for col in 'BCD':
-        w.na(f'{col}77', NO_BOOK)
+    w.link('B77', '=$E$55', X2)
+    w.f('C77', f'={PAT26}/$J$77', CR)
+    w.est('J77', INDUSTRY_ROE, PCT1)
+    w.f('D77', "=IFERROR(B77*C77+'Capital Allocation'!$C$80,\"\")", CR)
     w.link('B78', '=$F$55', RS)
     w.link('C78', "='Capacity Forecast'!$C$101", MT)
     w.f('D78', '=IFERROR(B78*C78/10,"")', CR)
     w.link('B79', '=$G$55', RS)
     w.link('C79', "='Steel Supply Model'!$C$101", MT)
     w.f('D79', '=IFERROR(B79*C79/10,"")', CR)
-    nas.append(na_row('Valuation bridge - price to book method', 'B77:D77', NO_BOOK, unit='Rs cr'))
+    rows.append(est_row(
+        'Valuation bridge - price to book method', 'B77:D77',
+        'Industry book value derived as profit after tax divided by an industry return on equity of 11%, '
+        'held in J77, then multiplied by the peer median price-to-book and grossed up by net debt to give '
+        'an enterprise value on the same basis as the other five methods in the table.',
+        'This row was blank, which meant the valuation bridge offered five methods rather than six and the '
+        'average in the implied valuation table below was struck on an incomplete set. It now resolves on '
+        'the same ROE inversion used for the individual companies, so the industry and company views of '
+        'book value are consistent with each other by construction.',
+        unit='Rs cr', linked='EBITDA Model, Cash Flow Model, Capital Allocation', value='=D77', numfmt=CR,
+        method='Peer median price-to-book multiplied by industry book value, plus net debt',
+        formula="=IFERROR(B77*C77+'Capital Allocation'!$C$80,\"\")",
+        primary='Derived: industry profit after tax divided by the assumed industry ROE in J77',
+        secondary='Consistent with the company-level ROE assumptions in column J of the peer universe',
+        cross='Must be read against the other five methods in the bridge and against replacement cost',
+        conf='Low - inherits both the ROE assumption and the share-price limitation',
+        freq='Quarterly'))
 
     # ---- implied enterprise valuation rows 84-89
-    for r, src in ((84, 'D74'), (85, 'D75'), (86, 'D76'), (88, 'D78')):
+    for r, src in ((84, 'D74'), (85, 'D75'), (86, 'D76'), (87, 'D77'), (88, 'D78')):
         w.f(f'B{r}', f'=IFERROR(${src},"")', CR)
         w.f(f'C{r}', f"=IFERROR(B{r}/'Capacity Forecast'!$C$101*10,\"\")", RS)
         w.f(f'D{r}', '=IFERROR(B%d/$E$121,"")' % r, PCT1)
-    for col in 'BCD':
-        w.na(f'{col}87', NO_BOOK)
     w.f('B89', '=IFERROR(AVERAGE(B84:B88),"")', CR)
     w.f('C89', "=IFERROR(B89/'Capacity Forecast'!$C$101*10,\"\")", RS)
     w.f('D89', '=IFERROR(B89/$E$121,"")', PCT1)
@@ -622,11 +701,25 @@ def comparable_valuation(wb, audit, eng):
         w.link(f'{col}11', f"='Model Assumptions'!$K${110 + i}", X1)
         w.f(f'{col}12', f'=IFERROR({ev}/{eng.cell(sc, "rev", 7)},"")', X2)
         w.f(f'{col}13', f'=IFERROR(({ev}-{nd})/{eng.cell(sc, "nopat", 7)},"")', X1)
-        w.na(f'{col}14', NO_BOOK)
+        w.f(f'{col}14', f'=IFERROR(({ev}-{nd})/$C$77,"")', X2)
         w.f(f'{col}15', f'=IF({ev}<$E$121*0.8,"Attractive - below replacement cost",'
                         f'IF({ev}<$E$121*1.2,"Fair - around replacement cost",'
                         f'"Full - above replacement cost"))', TEXT)
-    nas.append(na_row('Price to book by scenario', 'B14:E14', NO_BOOK, unit='x'))
+    rows.append(est_row(
+        'Price to book by scenario', 'B14:E14',
+        'Scenario equity value divided by the industry book value derived on row 77, so the executive '
+        'summary uses exactly the same book value as the valuation bridge.',
+        'The P/B row of the executive summary was blank in all four scenario columns. It resolves now that '
+        'industry book value is derived, and it is worth reading: the multiple moves with equity value '
+        'while book value is held at the FY2026A level, so it shows what each scenario implies about the '
+        'premium to today\'s equity base rather than to a forecast one.',
+        unit='x', linked='This sheet, Capital Allocation, Scenario Manager', value='=B14', numfmt=X2,
+        method='Scenario equity value divided by industry book value on C77',
+        formula='=IFERROR(($C$94-net debt)/$C$77,"")',
+        primary='Derived from the ROE inversion on row 77',
+        secondary='Enterprise and equity values come from the scenario valuation table on rows 94 to 97',
+        cross='Must be consistent with the price-to-book row of the valuation bridge',
+        conf='Low', freq='Quarterly'))
     rows.append(_sup(
         'Valuation executive summary', '=B9', 'Rs cr',
         'Computed in-cell: enterprise value from the scenario valuation; equity value by deducting net debt '

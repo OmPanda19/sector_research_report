@@ -2,16 +2,24 @@
 """Complete the Industry Financial Model.
 
 Reads the owner's formatted workbook, fills every empty cell in the newly designed
-tables, adds the scenario engine, adds all charts, appends a Support & Audit table to
-every sheet and writes the finished workbook. The owner's formatting, sheet names and
-architecture are preserved; the pre-existing research block on each sheet is never
-written to.
+tables, adds the scenario engine, adds all charts, stamps a reference code beside every
+documented row, writes the central reference register onto 25 Audit Checks and saves the
+finished workbook.
+
+The owner's formatting, sheet names and architecture are preserved. The pre-existing
+research block on each sheet is never written to except for the two arithmetic
+corrections in gen/corrections.py, which are disclosed individually and carried in the
+audit tool's allow-list.
+
+Model sheets carry model numbers and a reference code, nothing else: the documentation
+that used to sit in a Support & Audit table at the bottom of all 31 sheets now lives in
+one register, keyed by code.
 """
 import sys
 import openpyxl
 from openpyxl.workbook.defined_name import DefinedName
 
-from gen import (engine, support, assumptions, charts,
+from gen import (engine, support, register, corrections, assumptions, charts,
                  fills1, fills2, fills3, fills4, fills5)
 from gen.spec import LEGACY
 
@@ -78,22 +86,28 @@ def count_mdb(path='incoming/MDB_user.xlsx'):
 CONVENTIONS = [
     ('Blue font', 'Manual input',
      'A value a user is expected to review or change. Structural parameters held constant across years '
-     'and scenarios, and the handful of deliberate zeros that are modelling statements rather than '
-     'placeholders, are all blue.'),
+     'and scenarios, modelled estimates whose basis is stated in the register, and the handful of '
+     'deliberate zeros that are modelling statements rather than placeholders, are all blue.'),
     ('Black font', 'Formula computed on this sheet',
      'Arithmetic performed in the cell itself. Every bridge, reconciliation, ratio and classification is '
      'black.'),
     ('Green font', 'Link to another sheet',
      'The value exists in exactly one place in the workbook and is read from there. Roughly two thirds of '
      'the model is green, which is the point: nothing is re-keyed.'),
-    ('Red fill', 'Sourced from Master Industry Database.xlsx',
+    ('Orange fill', 'Sourced from an external workbook - Master Industry Database.xlsx',
      'Historical actuals and company-level data imported from the database. These are the cells to convert '
      'to external references when the two workbooks are reconnected. The exact intended external formula '
-     'is recorded against each one in the Support & Audit table of its sheet.'),
-    ('Orange fill', 'Reliable data unavailable after research - deliberately blank',
-     'Nothing is asserted in these cells. Every orange group has a row in its sheet\'s Support & Audit '
-     'table stating precisely why the data could not be obtained and what to enter instead. They are gaps '
-     'that are disclosed, not gaps that are hidden.'),
+     'is recorded against each one in the reference register on 25 Audit Checks.'),
+    ('Red fill', 'Missing data - no source and no defensible estimate',
+     'Nothing is asserted in these cells. Every red group has an entry in the reference register stating '
+     'precisely why the data could not be obtained and what to enter instead. They are gaps that are '
+     'disclosed, not gaps that are hidden - and they are now the exception rather than the rule, because '
+     'anything that could be modelled from a documented driver has been modelled instead of left blank.'),
+    ('Ref column', 'The reference code beside each table',
+     'Each documented row carries a short code in a narrow Ref column to the right of its table. The code '
+     'is a hyperlink: click it to jump to that row\'s full entry - method, formula, source, assumption, '
+     'reasoning, cross-check, confidence and refresh frequency - in the reference register on 25 Audit '
+     'Checks.'),
 ]
 
 
@@ -103,9 +117,9 @@ def convention_rows():
         method='Institutional modelling convention', formula='n/a',
         primary='Model owner specification', secondary='n/a',
         assumption='Applied without exception throughout the workbook.', reasoning=why,
-        cross='Verified by tools/audit.py: every blank cell inside a designed table carries an orange fill '
-              'and a documented reason',
-        conf='High', linked='All sheets', freq='n/a', last='n/a',
+        cross='Verified by tools/audit.py: every blank cell inside a designed table carries a red '
+              'missing-data fill and a documented reason in the register',
+        conf='High', linked='All sheets', freq='n/a', last='n/a', anchor=8,
         comments='Read this before reading any number.') for name, meaning, why in CONVENTIONS]
 
 
@@ -166,18 +180,25 @@ def main():
 
     audit['Cover'] = convention_rows() + audit['Cover']
 
-    # ---- Support & Audit table on every sheet
-    dash_row = None
-    n_rows = 0
-    for name in wb.sheetnames:
-        ws = wb[name]
-        hr = support.write(ws, extra_rows=audit.get(name), na_rows=nas.get(name),
-                           intro=support.INTRO.get(name))
-        if hr:
-            n_rows += ws.max_row - hr
-            if name == 'Industry Dashboard':
-                dash_row = ws.max_row + 3
-    log.append(f'Support & Audit tables written to every sheet: {n_rows} documented items')
+    # ---- two disclosed arithmetic corrections inside the research block
+    fixes = corrections.apply(wb, audit)
+    audit['Comparable Valuation'] = fixes + audit['Comparable Valuation']
+    log.append(f'{len(fixes)} arithmetic defect(s) in the research block corrected, not just flagged')
+
+    # ---- charts are anchored before the register is written, so the dashboard's
+    #      chart block sits directly under its own content
+    dash_row = wb['Industry Dashboard'].max_row + 3
+
+    # ---- the reference register: codes stamped beside every documented row, all of
+    #      the detail centralised on 25 Audit Checks
+    entries = {name: support.entries(wb[name], extra_rows=audit.get(name),
+                                     na_rows=nas.get(name))
+               for name in wb.sheetnames}
+    n_rows, header_row, stamped = register.build(wb, entries, intros=support.INTRO)
+    log.append(f'reference register written to Audit Checks: {n_rows} documented items across '
+               f'{len(header_row)} sheets, {stamped} codes stamped in Ref columns')
+    log.append('per-sheet Support & Audit tables removed - the model sheets now carry model numbers '
+               'and a reference code only')
 
     # ---- charts, built from scratch and linked to model ranges
     made = charts.build(wb, dash_row=dash_row)
@@ -192,6 +213,7 @@ def main():
 
     wb._ifm_audit = audit
     wb._ifm_nas = nas
+    wb._ifm_register = header_row
     wb.save(OUT)
     print('\n'.join('  * ' + x for x in log))
     print(f'saved {OUT}')

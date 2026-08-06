@@ -147,6 +147,32 @@ M = [
      lambda R, x, p: f"=220.4*{x}{R('capexint')}/10+{x}{R('nwc')}"),
     ('roic', 'ROIC (indicative)', '%', '0.0%', None,
      lambda R, x, p: f"=IFERROR({x}{R('nopat')}/{x}{R('ic')},\"\")"),
+
+    # ---- cycle scorecard, one indicator per row.
+    # These exist so that 18 Industry Cycle Model rows 70-71 can be a single SUMPRODUCT
+    # against a range instead of one 550-character formula per scenario. Each indicator
+    # is scored 0-100 on the same band as the live scorecard on that sheet, so the four
+    # scenarios and the live model are measured on exactly the same ruler.
+    ('cyc1', 'Cycle indicator 1 - real GDP growth (4% to 9%)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,({x}{R('gdp')}-4%)/5%*100))"),
+    ('cyc2', 'Cycle indicator 2 - consumption growth (2% to 12%)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,({x}{R('consg')}-2%)/10%*100))"),
+    ('cyc3', 'Cycle indicator 3 - capacity utilisation (65% to 92%)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,({x}{R('util')}-65%)/27%*100))"),
+    ('cyc4', 'Cycle indicator 4 - spare capacity, scored inversely (0% to 30%)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: (f"=MIN(100,MAX(0,100-({x}{R('cap')}-{x}{R('crudeu')})"
+                      f"/{x}{R('cap')}/30%*100))")),
+    ('cyc5', 'Cycle indicator 5 - blended realisation (Rs 50,000 to Rs 75,000/t)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,({x}{R('real')}-50000)/25000*100))"),
+    ('cyc6', 'Cycle indicator 6 - EBITDA margin (-10% to +26%)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,({x}{R('margin')}+10%)/36%*100))"),
+    ('cyc7', 'Cycle indicator 7 - capacity additions (0 to 25 Mtpa)', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,{x}{R('adds')}/25*100))"),
+    ('cyc8', 'Cycle indicator 8 - variation in stock, centred on 50', 'score', '0.0', 'DERIVE',
+     lambda R, x, p: f"=MIN(100,MAX(0,50-{x}{R('stock')}/{x}{R('cons')}*1000))"),
+    ('cycscore', 'CYCLE SCORE - weighted', 'score 0-100', '0.0', 'DERIVE',
+     lambda R, x, p: (f"=SUMPRODUCT('Industry Cycle Model'!$B$19:$B$26,"
+                      f"{x}{R('cyc1')}:{x}{R('cyc8')})")),
 ]
 
 NAMES = [m[0] for m in M]
